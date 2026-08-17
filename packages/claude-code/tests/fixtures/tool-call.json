@@ -186,7 +186,7 @@
           "memory_paths": {
             "auto": "/scrubbed/home/.claude/projects/scrubbed-project-slug/memory/"
           },
-          "messaging_socket_path": "/tmp/cc-socks/11616.sock",
+          "messaging_socket_path": "/tmp/cc-socks/scrubbed.sock",
           "fast_mode_state": "off",
           "fast_mode_disabled_reason": "sdk_opt_in_required"
         },
@@ -205,29 +205,6 @@
           "subtype": "status",
           "status": "requesting",
           "uuid": "uuid-scrubbed-0006",
-          "session_id": "uuid-scrubbed-0003"
-        },
-        "meta": {
-          "interruptArtifact": false,
-          "interruptedTurn": false,
-          "reinit": false
-        }
-      }
-    },
-    {
-      "kind": "message",
-      "envelope": {
-        "message": {
-          "type": "rate_limit_event",
-          "rate_limit_info": {
-            "status": "allowed",
-            "resetsAt": 0,
-            "rateLimitType": "five_hour",
-            "overageStatus": "rejected",
-            "overageDisabledReason": "out_of_credits",
-            "isUsingOverage": false
-          },
-          "uuid": "uuid-scrubbed-0007",
           "session_id": "uuid-scrubbed-0003"
         },
         "meta": {
@@ -270,7 +247,7 @@
           },
           "session_id": "uuid-scrubbed-0003",
           "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0008",
+          "uuid": "uuid-scrubbed-0007",
           "ttft_ms": 0
         },
         "meta": {
@@ -296,7 +273,7 @@
           },
           "session_id": "uuid-scrubbed-0003",
           "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0009"
+          "uuid": "uuid-scrubbed-0008"
         },
         "meta": {
           "interruptArtifact": false,
@@ -313,7 +290,7 @@
           "subtype": "thinking_tokens",
           "estimated_tokens": 4,
           "estimated_tokens_delta": 4,
-          "uuid": "uuid-scrubbed-0010",
+          "uuid": "uuid-scrubbed-0009",
           "session_id": "uuid-scrubbed-0003"
         },
         "meta": {
@@ -339,7 +316,30 @@
           },
           "session_id": "uuid-scrubbed-0003",
           "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0011"
+          "uuid": "uuid-scrubbed-0010"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "rate_limit_event",
+          "rate_limit_info": {
+            "status": "allowed",
+            "resetsAt": 0,
+            "rateLimitType": "five_hour",
+            "overageStatus": "rejected",
+            "overageDisabledReason": "out_of_credits",
+            "isUsingOverage": false
+          },
+          "uuid": "uuid-scrubbed-0011",
+          "session_id": "uuid-scrubbed-0003"
         },
         "meta": {
           "interruptArtifact": false,
@@ -354,8 +354,8 @@
         "message": {
           "type": "system",
           "subtype": "thinking_tokens",
-          "estimated_tokens": 7,
-          "estimated_tokens_delta": 3,
+          "estimated_tokens": 41,
+          "estimated_tokens_delta": 37,
           "uuid": "uuid-scrubbed-0012",
           "session_id": "uuid-scrubbed-0003"
         },
@@ -376,7 +376,7 @@
             "index": 0,
             "delta": {
               "type": "thinking_delta",
-              "thinking": " me to run `",
+              "thinking": " me to run `echo fixture-hello` using the Bash tool and then report exactly what it printed in one short sentence.\n\nLet me call the Bash tool to run",
               "estimated_tokens": null
             }
           },
@@ -397,8 +397,8 @@
         "message": {
           "type": "system",
           "subtype": "thinking_tokens",
-          "estimated_tokens": 44,
-          "estimated_tokens_delta": 37,
+          "estimated_tokens": 45,
+          "estimated_tokens_delta": 4,
           "uuid": "uuid-scrubbed-0014",
           "session_id": "uuid-scrubbed-0003"
         },
@@ -419,7 +419,7 @@
             "index": 0,
             "delta": {
               "type": "thinking_delta",
-              "thinking": "echo fixture-hello` using the Bash tool and then tell them exactly what it printed in one short sentence.\n\nThis is straightforward - I'll call the",
+              "thinking": " this command.",
               "estimated_tokens": null
             }
           },
@@ -440,8 +440,8 @@
         "message": {
           "type": "system",
           "subtype": "thinking_tokens",
-          "estimated_tokens": 53,
-          "estimated_tokens_delta": 9,
+          "estimated_tokens": 113,
+          "estimated_tokens_delta": 68,
           "uuid": "uuid-scrubbed-0016",
           "session_id": "uuid-scrubbed-0003"
         },
@@ -461,56 +461,13 @@
             "type": "content_block_delta",
             "index": 0,
             "delta": {
-              "type": "thinking_delta",
-              "thinking": " Bash tool to run that echo command.",
-              "estimated_tokens": null
+              "type": "signature_delta",
+              "signature": "ErwDCqgBCBAYAipAK2Q3VkRpwVKgPjgvVh3VUOjkFlVVWNcn49PRUV7UWxmzcW4wkHNH14qHs5cR9JWMyhzWbyYGs7E4scrkA7ClETIZY2xhdWRlLWhhaWt1LTQtNS0yMDI1MTAwMTgAQgh0aGlua2luZ1okYzM0MWE5YTYtOWY3Yi00OTEyLWIyNDEtYjExODhiNjBhMWRlchCAh6VC6syYqG9oxmFJxDd3iAEBEgzTb3ZvJUV702W9pkAaDLCW9b1+FNlUbNjJGyIwKZ+Ipt7GK56QlffmjMF8sB1f+tedykO1sxRg+oMDeYL0je16jxDQVMGHffjlx3g0KsABySkiXz9Ur+4SKlh2J1Qzo345F1ksVLxEeY317OwqwD5aUKRkqpNNlhY7we01s0PZ4N9/zGJyG2VaVrRqTuJykDaDuB+sKiffACSptL6ynfGokG2fE5UIn3fKX4VZKZgkXQ7BCDl4ZEkzZqmKw1C400NVwJaC5TXgeG/DFVoleTjXNR9USRHT3k3h4xEC+I1bJhlfvHIquPNHkhVxReKfH1zDZ1iBOsYiJQzsW7HsfrJYhOJhP6AIrfbqRxFQ2eDZGAE="
             }
           },
           "session_id": "uuid-scrubbed-0003",
           "parent_tool_use_id": null,
           "uuid": "uuid-scrubbed-0017"
-        },
-        "meta": {
-          "interruptArtifact": false,
-          "interruptedTurn": false,
-          "reinit": false
-        }
-      }
-    },
-    {
-      "kind": "message",
-      "envelope": {
-        "message": {
-          "type": "system",
-          "subtype": "thinking_tokens",
-          "estimated_tokens": 121,
-          "estimated_tokens_delta": 68,
-          "uuid": "uuid-scrubbed-0018",
-          "session_id": "uuid-scrubbed-0003"
-        },
-        "meta": {
-          "interruptArtifact": false,
-          "interruptedTurn": false,
-          "reinit": false
-        }
-      }
-    },
-    {
-      "kind": "message",
-      "envelope": {
-        "message": {
-          "type": "stream_event",
-          "event": {
-            "type": "content_block_delta",
-            "index": 0,
-            "delta": {
-              "type": "signature_delta",
-              "signature": "EtwDCqgBCBAYAipAeOO/TxMGFJypKx2FvrgEarFHA9QvtGFJr7L3RZVouKxvBhOHVbwW1FsVShyhujTqPOgwByvwaDQhjbDOTj9EbjIZY2xhdWRlLWhhaWt1LTQtNS0yMDI1MTAwMTgAQgh0aGlua2luZ1okYzM0MWE5YTYtOWY3Yi00OTEyLWIyNDEtYjExODhiNjBhMWRlchCAh6VC6syYqG9oxmFJxDd3iAEBEgz29penxOkUdhW81FsaDDeJwnrp7qNH/EizWiIwxWGiqYgNiZm4YCZ0rxqnzRL/M0XyfEu/vHjiI+5sFrtu2hvJjcDcJoDJdl4PgHEsKuABJIssCmOwlhoQR49nuH4KogkevQO7ocdBqVW6SbE50g49lhZBsxWAPl4St1Xp7h6jSX0HYn5OS4JmEBskHC/zVRHuSIApePMpccORydGKhjRb9wBi2/XF1VDKhRBx8YM3phjZ5/Wl/xN70O30BOO7vPzD4lpyXYfzpiUtJA89XjPBr02FRnmxoQZfSGQy9sm9A39rI7DEWwZOdNfWSmYCKF8kL+n9y5Im2t0hSG/LCBZ/R+Ml3gji9ZbyubCcysUALcv9+LenaCQrJKiU03vocdg80WsWLRfWGEdIN4HMXAMYAQ=="
-            }
-          },
-          "session_id": "uuid-scrubbed-0003",
-          "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0019"
         },
         "meta": {
           "interruptArtifact": false,
@@ -532,8 +489,8 @@
             "content": [
               {
                 "type": "thinking",
-                "thinking": "The user wants me to run `echo fixture-hello` using the Bash tool and then tell them exactly what it printed in one short sentence.\n\nThis is straightforward - I'll call the Bash tool to run that echo command.",
-                "signature": "EtwDCqgBCBAYAipAeOO/TxMGFJypKx2FvrgEarFHA9QvtGFJr7L3RZVouKxvBhOHVbwW1FsVShyhujTqPOgwByvwaDQhjbDOTj9EbjIZY2xhdWRlLWhhaWt1LTQtNS0yMDI1MTAwMTgAQgh0aGlua2luZ1okYzM0MWE5YTYtOWY3Yi00OTEyLWIyNDEtYjExODhiNjBhMWRlchCAh6VC6syYqG9oxmFJxDd3iAEBEgz29penxOkUdhW81FsaDDeJwnrp7qNH/EizWiIwxWGiqYgNiZm4YCZ0rxqnzRL/M0XyfEu/vHjiI+5sFrtu2hvJjcDcJoDJdl4PgHEsKuABJIssCmOwlhoQR49nuH4KogkevQO7ocdBqVW6SbE50g49lhZBsxWAPl4St1Xp7h6jSX0HYn5OS4JmEBskHC/zVRHuSIApePMpccORydGKhjRb9wBi2/XF1VDKhRBx8YM3phjZ5/Wl/xN70O30BOO7vPzD4lpyXYfzpiUtJA89XjPBr02FRnmxoQZfSGQy9sm9A39rI7DEWwZOdNfWSmYCKF8kL+n9y5Im2t0hSG/LCBZ/R+Ml3gji9ZbyubCcysUALcv9+LenaCQrJKiU03vocdg80WsWLRfWGEdIN4HMXAMYAQ=="
+                "thinking": "The user wants me to run `echo fixture-hello` using the Bash tool and then report exactly what it printed in one short sentence.\n\nLet me call the Bash tool to run this command.",
+                "signature": "ErwDCqgBCBAYAipAK2Q3VkRpwVKgPjgvVh3VUOjkFlVVWNcn49PRUV7UWxmzcW4wkHNH14qHs5cR9JWMyhzWbyYGs7E4scrkA7ClETIZY2xhdWRlLWhhaWt1LTQtNS0yMDI1MTAwMTgAQgh0aGlua2luZ1okYzM0MWE5YTYtOWY3Yi00OTEyLWIyNDEtYjExODhiNjBhMWRlchCAh6VC6syYqG9oxmFJxDd3iAEBEgzTb3ZvJUV702W9pkAaDLCW9b1+FNlUbNjJGyIwKZ+Ipt7GK56QlffmjMF8sB1f+tedykO1sxRg+oMDeYL0je16jxDQVMGHffjlx3g0KsABySkiXz9Ur+4SKlh2J1Qzo345F1ksVLxEeY317OwqwD5aUKRkqpNNlhY7we01s0PZ4N9/zGJyG2VaVrRqTuJykDaDuB+sKiffACSptL6ynfGokG2fE5UIn3fKX4VZKZgkXQ7BCDl4ZEkzZqmKw1C400NVwJaC5TXgeG/DFVoleTjXNR9USRHT3k3h4xEC+I1bJhlfvHIquPNHkhVxReKfH1zDZ1iBOsYiJQzsW7HsfrJYhOJhP6AIrfbqRxFQ2eDZGAE="
               }
             ],
             "stop_reason": null,
@@ -556,9 +513,9 @@
           },
           "parent_tool_use_id": null,
           "session_id": "uuid-scrubbed-0003",
-          "uuid": "uuid-scrubbed-0020",
-          "timestamp": "2026-08-17T21:46:34.208Z",
-          "request_id": "req_011Ce947YoPD8ivN9JKQH384"
+          "uuid": "uuid-scrubbed-0018",
+          "timestamp": "2026-08-17T22:46:20.596Z",
+          "request_id": "req_011Ce98fxbDwhsMhDSUpgdEv"
         },
         "meta": {
           "interruptArtifact": false,
@@ -578,7 +535,7 @@
           },
           "session_id": "uuid-scrubbed-0003",
           "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0021"
+          "uuid": "uuid-scrubbed-0019"
         },
         "meta": {
           "interruptArtifact": false,
@@ -607,7 +564,7 @@
           },
           "session_id": "uuid-scrubbed-0003",
           "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0022"
+          "uuid": "uuid-scrubbed-0020"
         },
         "meta": {
           "interruptArtifact": false,
@@ -631,7 +588,7 @@
           },
           "session_id": "uuid-scrubbed-0003",
           "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0023"
+          "uuid": "uuid-scrubbed-0021"
         },
         "meta": {
           "interruptArtifact": false,
@@ -655,7 +612,7 @@
           },
           "session_id": "uuid-scrubbed-0003",
           "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0024"
+          "uuid": "uuid-scrubbed-0022"
         },
         "meta": {
           "interruptArtifact": false,
@@ -679,7 +636,7 @@
           },
           "session_id": "uuid-scrubbed-0003",
           "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0025"
+          "uuid": "uuid-scrubbed-0023"
         },
         "meta": {
           "interruptArtifact": false,
@@ -703,7 +660,7 @@
           },
           "session_id": "uuid-scrubbed-0003",
           "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0026"
+          "uuid": "uuid-scrubbed-0024"
         },
         "meta": {
           "interruptArtifact": false,
@@ -756,9 +713,9 @@
           },
           "parent_tool_use_id": null,
           "session_id": "uuid-scrubbed-0003",
-          "uuid": "uuid-scrubbed-0027",
-          "timestamp": "2026-08-17T21:46:34.576Z",
-          "request_id": "req_011Ce947YoPD8ivN9JKQH384"
+          "uuid": "uuid-scrubbed-0025",
+          "timestamp": "2026-08-17T22:46:20.937Z",
+          "request_id": "req_011Ce98fxbDwhsMhDSUpgdEv"
         },
         "meta": {
           "interruptArtifact": false,
@@ -778,7 +735,7 @@
           },
           "session_id": "uuid-scrubbed-0003",
           "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0028"
+          "uuid": "uuid-scrubbed-0026"
         },
         "meta": {
           "interruptArtifact": false,
@@ -827,7 +784,7 @@
           },
           "session_id": "uuid-scrubbed-0003",
           "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0029"
+          "uuid": "uuid-scrubbed-0027"
         },
         "meta": {
           "interruptArtifact": false,
@@ -846,7 +803,7 @@
           },
           "session_id": "uuid-scrubbed-0003",
           "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0030"
+          "uuid": "uuid-scrubbed-0028"
         },
         "meta": {
           "interruptArtifact": false,
@@ -873,8 +830,8 @@
           },
           "parent_tool_use_id": null,
           "session_id": "uuid-scrubbed-0003",
-          "uuid": "uuid-scrubbed-0031",
-          "timestamp": "2026-08-17T21:46:35.168Z",
+          "uuid": "uuid-scrubbed-0029",
+          "timestamp": "2026-08-17T22:46:21.669Z",
           "tool_use_result": {
             "stdout": "fixture-hello",
             "stderr": "",
@@ -897,7 +854,7 @@
           "type": "system",
           "subtype": "status",
           "status": "requesting",
-          "uuid": "uuid-scrubbed-0032",
+          "uuid": "uuid-scrubbed-0030",
           "session_id": "uuid-scrubbed-0003"
         },
         "meta": {
@@ -940,7 +897,7 @@
           },
           "session_id": "uuid-scrubbed-0003",
           "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0033",
+          "uuid": "uuid-scrubbed-0031",
           "ttft_ms": 0
         },
         "meta": {
@@ -966,6 +923,49 @@
           },
           "session_id": "uuid-scrubbed-0003",
           "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0032"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "system",
+          "subtype": "thinking_tokens",
+          "estimated_tokens": 1,
+          "estimated_tokens_delta": 1,
+          "uuid": "uuid-scrubbed-0033",
+          "session_id": "uuid-scrubbed-0003"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+              "type": "thinking_delta",
+              "thinking": "The",
+              "estimated_tokens": null
+            }
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
           "uuid": "uuid-scrubbed-0034"
         },
         "meta": {
@@ -981,8 +981,8 @@
         "message": {
           "type": "system",
           "subtype": "thinking_tokens",
-          "estimated_tokens": 3,
-          "estimated_tokens_delta": 3,
+          "estimated_tokens": 19,
+          "estimated_tokens_delta": 18,
           "uuid": "uuid-scrubbed-0035",
           "session_id": "uuid-scrubbed-0003"
         },
@@ -1003,7 +1003,7 @@
             "index": 0,
             "delta": {
               "type": "thinking_delta",
-              "thinking": "The command",
+              "thinking": " command `echo fixture-hello` printed exactly `fixture-hello` followed",
               "estimated_tokens": null
             }
           },
@@ -1024,8 +1024,8 @@
         "message": {
           "type": "system",
           "subtype": "thinking_tokens",
-          "estimated_tokens": 4,
-          "estimated_tokens_delta": 1,
+          "estimated_tokens": 39,
+          "estimated_tokens_delta": 20,
           "uuid": "uuid-scrubbed-0037",
           "session_id": "uuid-scrubbed-0003"
         },
@@ -1046,7 +1046,7 @@
             "index": 0,
             "delta": {
               "type": "thinking_delta",
-              "thinking": " ran",
+              "thinking": " by a newline. Let me report this in one short sentence as the user requested.",
               "estimated_tokens": null
             }
           },
@@ -1067,8 +1067,8 @@
         "message": {
           "type": "system",
           "subtype": "thinking_tokens",
-          "estimated_tokens": 26,
-          "estimated_tokens_delta": 22,
+          "estimated_tokens": 107,
+          "estimated_tokens_delta": 68,
           "uuid": "uuid-scrubbed-0039",
           "session_id": "uuid-scrubbed-0003"
         },
@@ -1088,142 +1088,13 @@
             "type": "content_block_delta",
             "index": 0,
             "delta": {
-              "type": "thinking_delta",
-              "thinking": " successfully and printed \"fixture-hello\" (with a newline at the end, which is typical",
-              "estimated_tokens": null
+              "type": "signature_delta",
+              "signature": "EqMDCqgBCBAYAipAdPNQnmeLAOkSj49QaxVf2zI6dt5sl+m/AAGNs1dg/hd68qMN+xcY14pxBe+tQhHaFxOJ7ALw3OZR8dNaQqucVzIZY2xhdWRlLWhhaWt1LTQtNS0yMDI1MTAwMTgAQgh0aGlua2luZ1okYzM0MWE5YTYtOWY3Yi00OTEyLWIyNDEtYjExODhiNjBhMWRlchCAh6VC6syYqG9oxmFJxDd3iAEBEgzxiPIAb3FqSJ5uGcUaDNj0E1mFaooQYvZH8yIwV9LbPXF36hJENz6eThh59u1zpFOJy4UF9bsfvWwYgwEnULenuOYSFN0dQTNDZp7vKqcBGnJX1RzNB5owLiTzNRhUwohJMB4rg+tZhfQOBimGwi1htJ91qro6BI9oWZGSevDga9Fm/kbsy3Sf6IZ4luyg02qdA5yXSmbq1Gm0hyMoKVdy7vygZhwCxz8/5eKBAz0XoGi6c+Of2RAea0RWR6DjrgnIB0DVW9aksbR/jgN8D9EDwefP5GI/mvGh4cTqrecyR66C9F7xCV7wl+peqjlDHgULoLg6iXIYAQ=="
             }
           },
           "session_id": "uuid-scrubbed-0003",
           "parent_tool_use_id": null,
           "uuid": "uuid-scrubbed-0040"
-        },
-        "meta": {
-          "interruptArtifact": false,
-          "interruptedTurn": false,
-          "reinit": false
-        }
-      }
-    },
-    {
-      "kind": "message",
-      "envelope": {
-        "message": {
-          "type": "system",
-          "subtype": "thinking_tokens",
-          "estimated_tokens": 45,
-          "estimated_tokens_delta": 19,
-          "uuid": "uuid-scrubbed-0041",
-          "session_id": "uuid-scrubbed-0003"
-        },
-        "meta": {
-          "interruptArtifact": false,
-          "interruptedTurn": false,
-          "reinit": false
-        }
-      }
-    },
-    {
-      "kind": "message",
-      "envelope": {
-        "message": {
-          "type": "stream_event",
-          "event": {
-            "type": "content_block_delta",
-            "index": 0,
-            "delta": {
-              "type": "thinking_delta",
-              "thinking": " for echo). The user asked me to tell them exactly what it printed in one",
-              "estimated_tokens": null
-            }
-          },
-          "session_id": "uuid-scrubbed-0003",
-          "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0042"
-        },
-        "meta": {
-          "interruptArtifact": false,
-          "interruptedTurn": false,
-          "reinit": false
-        }
-      }
-    },
-    {
-      "kind": "message",
-      "envelope": {
-        "message": {
-          "type": "system",
-          "subtype": "thinking_tokens",
-          "estimated_tokens": 49,
-          "estimated_tokens_delta": 4,
-          "uuid": "uuid-scrubbed-0043",
-          "session_id": "uuid-scrubbed-0003"
-        },
-        "meta": {
-          "interruptArtifact": false,
-          "interruptedTurn": false,
-          "reinit": false
-        }
-      }
-    },
-    {
-      "kind": "message",
-      "envelope": {
-        "message": {
-          "type": "stream_event",
-          "event": {
-            "type": "content_block_delta",
-            "index": 0,
-            "delta": {
-              "type": "thinking_delta",
-              "thinking": " short sentence.",
-              "estimated_tokens": null
-            }
-          },
-          "session_id": "uuid-scrubbed-0003",
-          "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0044"
-        },
-        "meta": {
-          "interruptArtifact": false,
-          "interruptedTurn": false,
-          "reinit": false
-        }
-      }
-    },
-    {
-      "kind": "message",
-      "envelope": {
-        "message": {
-          "type": "system",
-          "subtype": "thinking_tokens",
-          "estimated_tokens": 117,
-          "estimated_tokens_delta": 68,
-          "uuid": "uuid-scrubbed-0045",
-          "session_id": "uuid-scrubbed-0003"
-        },
-        "meta": {
-          "interruptArtifact": false,
-          "interruptedTurn": false,
-          "reinit": false
-        }
-      }
-    },
-    {
-      "kind": "message",
-      "envelope": {
-        "message": {
-          "type": "stream_event",
-          "event": {
-            "type": "content_block_delta",
-            "index": 0,
-            "delta": {
-              "type": "signature_delta",
-              "signature": "EsoDCqgBCBAYAipALL3d26CCNa9ILtsCyUEJ4c8SmagAYL0HeCM/2gM0DlX8mxtL4ZnBTsdAIN4W+GJdrHRdBTcuWByVWs47/mJpWjIZY2xhdWRlLWhhaWt1LTQtNS0yMDI1MTAwMTgAQgh0aGlua2luZ1okYzM0MWE5YTYtOWY3Yi00OTEyLWIyNDEtYjExODhiNjBhMWRlchCAh6VC6syYqG9oxmFJxDd3iAEBEgwlWsw7eBsu1jWWWy8aDCb7FR/pKOkcfmztyiIw/2ViSzk+iIh5kcjkLowWtfg2iyzAdmATYVaFN6RaFN1XDA2mjMZn1JYRDNejnGd7Ks4BeAeh2jlJchtdc86AcjqS2/+MdzG1srCsDRv179mdaGwySx/9Nvj8qKhLglTapxpBkuTCA2h+2na71wyiUCR4kAweoWPBQugFFHA31713nkVMsdnSjcvEUTJSHWfx2qQyVJiRl4synCcMjaZ82urmyfobPr611T/beXanIS9T+1lkaxfDK9eL3mIi7JV2M03M3tG1WmY3/y97Kj7WBFao1d/eNjWuIErerjAKnlUwD9c7iL8xG8AGnSUgrBv+loaQZgnXyLV7/+ud//9DeqIYAQ=="
-            }
-          },
-          "session_id": "uuid-scrubbed-0003",
-          "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0046"
         },
         "meta": {
           "interruptArtifact": false,
@@ -1245,8 +1116,8 @@
             "content": [
               {
                 "type": "thinking",
-                "thinking": "The command ran successfully and printed \"fixture-hello\" (with a newline at the end, which is typical for echo). The user asked me to tell them exactly what it printed in one short sentence.",
-                "signature": "EsoDCqgBCBAYAipALL3d26CCNa9ILtsCyUEJ4c8SmagAYL0HeCM/2gM0DlX8mxtL4ZnBTsdAIN4W+GJdrHRdBTcuWByVWs47/mJpWjIZY2xhdWRlLWhhaWt1LTQtNS0yMDI1MTAwMTgAQgh0aGlua2luZ1okYzM0MWE5YTYtOWY3Yi00OTEyLWIyNDEtYjExODhiNjBhMWRlchCAh6VC6syYqG9oxmFJxDd3iAEBEgwlWsw7eBsu1jWWWy8aDCb7FR/pKOkcfmztyiIw/2ViSzk+iIh5kcjkLowWtfg2iyzAdmATYVaFN6RaFN1XDA2mjMZn1JYRDNejnGd7Ks4BeAeh2jlJchtdc86AcjqS2/+MdzG1srCsDRv179mdaGwySx/9Nvj8qKhLglTapxpBkuTCA2h+2na71wyiUCR4kAweoWPBQugFFHA31713nkVMsdnSjcvEUTJSHWfx2qQyVJiRl4synCcMjaZ82urmyfobPr611T/beXanIS9T+1lkaxfDK9eL3mIi7JV2M03M3tG1WmY3/y97Kj7WBFao1d/eNjWuIErerjAKnlUwD9c7iL8xG8AGnSUgrBv+loaQZgnXyLV7/+ud//9DeqIYAQ=="
+                "thinking": "The command `echo fixture-hello` printed exactly `fixture-hello` followed by a newline. Let me report this in one short sentence as the user requested.",
+                "signature": "EqMDCqgBCBAYAipAdPNQnmeLAOkSj49QaxVf2zI6dt5sl+m/AAGNs1dg/hd68qMN+xcY14pxBe+tQhHaFxOJ7ALw3OZR8dNaQqucVzIZY2xhdWRlLWhhaWt1LTQtNS0yMDI1MTAwMTgAQgh0aGlua2luZ1okYzM0MWE5YTYtOWY3Yi00OTEyLWIyNDEtYjExODhiNjBhMWRlchCAh6VC6syYqG9oxmFJxDd3iAEBEgzxiPIAb3FqSJ5uGcUaDNj0E1mFaooQYvZH8yIwV9LbPXF36hJENz6eThh59u1zpFOJy4UF9bsfvWwYgwEnULenuOYSFN0dQTNDZp7vKqcBGnJX1RzNB5owLiTzNRhUwohJMB4rg+tZhfQOBimGwi1htJ91qro6BI9oWZGSevDga9Fm/kbsy3Sf6IZ4luyg02qdA5yXSmbq1Gm0hyMoKVdy7vygZhwCxz8/5eKBAz0XoGi6c+Of2RAea0RWR6DjrgnIB0DVW9aksbR/jgN8D9EDwefP5GI/mvGh4cTqrecyR66C9F7xCV7wl+peqjlDHgULoLg6iXIYAQ=="
               }
             ],
             "stop_reason": null,
@@ -1269,9 +1140,9 @@
           },
           "parent_tool_use_id": null,
           "session_id": "uuid-scrubbed-0003",
-          "uuid": "uuid-scrubbed-0047",
-          "timestamp": "2026-08-17T21:46:37.290Z",
-          "request_id": "req_011Ce947nLUKnEL72PjNQujK"
+          "uuid": "uuid-scrubbed-0041",
+          "timestamp": "2026-08-17T22:46:23.055Z",
+          "request_id": "req_011Ce98g9z5KMtGYRaZzUdPx"
         },
         "meta": {
           "interruptArtifact": false,
@@ -1291,7 +1162,7 @@
           },
           "session_id": "uuid-scrubbed-0003",
           "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0048"
+          "uuid": "uuid-scrubbed-0042"
         },
         "meta": {
           "interruptArtifact": false,
@@ -1315,7 +1186,7 @@
           },
           "session_id": "uuid-scrubbed-0003",
           "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0049"
+          "uuid": "uuid-scrubbed-0043"
         },
         "meta": {
           "interruptArtifact": false,
@@ -1334,12 +1205,36 @@
             "index": 1,
             "delta": {
               "type": "text_delta",
-              "text": "It printed `fixture-hello`."
+              "text": "It printed"
             }
           },
           "session_id": "uuid-scrubbed-0003",
           "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0050"
+          "uuid": "uuid-scrubbed-0044"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": {
+              "type": "text_delta",
+              "text": " `fixture-hello`."
+            }
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0045"
         },
         "meta": {
           "interruptArtifact": false,
@@ -1384,9 +1279,9 @@
           },
           "parent_tool_use_id": null,
           "session_id": "uuid-scrubbed-0003",
-          "uuid": "uuid-scrubbed-0051",
-          "timestamp": "2026-08-17T21:46:37.317Z",
-          "request_id": "req_011Ce947nLUKnEL72PjNQujK"
+          "uuid": "uuid-scrubbed-0046",
+          "timestamp": "2026-08-17T22:46:23.119Z",
+          "request_id": "req_011Ce98g9z5KMtGYRaZzUdPx"
         },
         "meta": {
           "interruptArtifact": false,
@@ -1406,7 +1301,7 @@
           },
           "session_id": "uuid-scrubbed-0003",
           "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0052"
+          "uuid": "uuid-scrubbed-0047"
         },
         "meta": {
           "interruptArtifact": false,
@@ -1455,7 +1350,7 @@
           },
           "session_id": "uuid-scrubbed-0003",
           "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0053"
+          "uuid": "uuid-scrubbed-0048"
         },
         "meta": {
           "interruptArtifact": false,
@@ -1474,7 +1369,7 @@
           },
           "session_id": "uuid-scrubbed-0003",
           "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0054"
+          "uuid": "uuid-scrubbed-0049"
         },
         "meta": {
           "interruptArtifact": false,
@@ -1554,7 +1449,7 @@
           "request_sent_wall_ms": 0,
           "type": "result",
           "duration_ms": 0,
-          "uuid": "uuid-scrubbed-0055"
+          "uuid": "uuid-scrubbed-0050"
         },
         "meta": {
           "interruptArtifact": false,

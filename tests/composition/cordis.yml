@@ -23,6 +23,18 @@
 - id: tools
   name: '@deepseek-ai/dsh-tools'
 
+# --- the jobs runtime `claude_code_open({ background: true })` requires -------
+# `dsh-jobs-local` provides `ctx.jobs`; `dsh-tool-jobs` attaches the controller
+# `ctx.jobs.start()` refuses to publish work without, and registers the generic
+# job_list / job_output / job_kill tools a background Claude Code session is
+# then driven through (delta D10). Loading one without the other is the
+# misconfiguration this row pair exists to rule out.
+- id: jobs
+  name: '@deepseek-ai/dsh-jobs-local'
+
+- id: tool-jobs
+  name: '@deepseek-ai/dsh-tool-jobs'
+
 # --- this integration --------------------------------------------------------
 # Non-default values throughout, so the test can prove the YAML row (not the
 # schema's own defaults) is what `ctx.claudeCode.config` ends up reporting.

@@ -881,6 +881,104 @@ auto-approves things like `echo` BELOW `canUseTool` entirely. The dsh approval
 log is a record of what dsh was ASKED, never a complete record of what Claude
 Code ran.
 
+### 4.4e The model-facing tools (Phase 5, `@deepseek-ai/dsh-tool-claude-code`)
+
+Six tools, all bodies live as of Phase 5. `inject: ['tools', 'claudeCode']`;
+`ctx.sessions`, `ctx.agents` and `ctx.jobs` are read opportunistically with
+`ctx.get(...)` so the plugin still mounts in a composition that has none.
+
+| Tool | Args | Canonical return |
+|---|---|---|
+| `claude_code_open` | `cwd`, `prompt?`, `model?`, `permission_mode?`, `resume?`, `fork?`, `background?` | `{ kind: 'session', session_id, status, result?, usage?, cost_usd? }` **or** `{ kind: 'background', jobId, ccSessionId }` |
+| `claude_code_send` | `session_id`, `message`, `mode: 'followup'\|'steer'` | `{ status }` |
+| `claude_code_wait` | `session_id`, `timeout_ms?` | `{ status, result?, usage?, cost_usd? }` |
+| `claude_code_status` | `session_id` | `{ status, pending_asks, context_usage? }` |
+| `claude_code_cancel` | `session_id`, `keep_queued?` | `{ still_queued: string[] }` |
+| `claude_code_close` | `session_id` | `{ closed: true }` |
+
+**Schema change (additive only).** `claude_code_open`'s `session` branch gained
+three OPTIONAL fields — `result`, `usage` (`{ input_tokens, output_tokens }`),
+`cost_usd` — because synchronous mode now returns the turn it waited for.
+Nothing was removed or retyped; `output.render` appends the answer under the
+session line.
+
+**The open sequence** (`src/open.ts`), which is the whole reason the tool does
+not pass `prompt` straight to the seam:
+
+1. `ctx.claudeCode.open({ …, ask })` **without** `prompt`. The seam mints the id
+   and attaches the ask target before the handshake.
+2. `ctx.sessions.create(<that id>, { meta: { cwd } })` (or `get()` for a plain
+   resume, which keeps the resumed id) → `ctx.claudeCode.attachMirror(id, log)`.
+   The dsh session and the CC session share ONE id (D1); no store → the session
+   runs unmirrored, which is supported and silent.
+3. `session.send(prompt, { mode: 'followup' })`. `send()` is synchronous and
+   frames `turn/start` + `user/message` through the mirror, so a prompt sent in
+   step 1 would be invisible in the dsh log.
+
+If the mirror cannot be attached, the session is closed before the error
+propagates — a live subprocess must never be stranded by a composition bug.
+
+**Ask target (§4.5).** `exec.agent` present → `{ agent, delegated }`, where
+`delegated` is `exec.agent` NOT being in `ctx.agents.roots()`, compared by `id`
+(never by object identity — cordis hands out fresh proxies). `exec.agent`
+absent (a headless tool call) → **no target at all**, and the seam's fail-closed
+default denies every ask with an explanation.
+
+**Lifecycle.** A session OUTLIVES the tool call that opened it, in every mode.
+`claude_code_open` returns after the opening turn; the session stays open for
+`claude_code_send` follow-ups until one of: `claude_code_close`, the seam's
+teardown effect (plugin unload/HMR), or — for a background session —
+`job_kill` / owner disposal. Neither `exec.signal` nor a `CC_TIMEOUT` closes
+anything.
+
+**Timeouts.** `claude_code_open` (sync, with a prompt) waits up to
+`SYNC_OPEN_TIMEOUT_MS` (10 min); `claude_code_wait` clamps `timeout_ms` to
+`MAX_WAIT_TIMEOUT_MS` (10 min) and uses it when `timeout_ms` is absent. Expiry
+is `CC_TIMEOUT` carrying `data.session_id` — the session is untouched and still
+running.
+
+**Background mode** (`src/background.ts`) follows `@deepseek-ai/dsh-tool-bash`
+exactly, per D10:
+
+- `ctx.get('jobs')` absent → `CC_NO_JOBS` naming `@deepseek-ai/dsh-jobs` and
+  `@deepseek-ai/dsh-tool-jobs`; nothing is opened.
+- `exec.signal.aborted` re-checked immediately before `ctx.jobs.start()` →
+  `CC_ABORTED` with `name: 'AbortError'`. That check is the LAST instant the
+  caller owns cancellation: `exec.signal` is never wired into the session, so
+  aborting the tool call after `start()` published the id leaves the session
+  running and the job unsettled (delta D10).
+- `ctx.jobs.start()` throwing → `CC_JOB_REJECTED`, quoting the registry's own
+  refusal (normally the default cap of 10 concurrent jobs per owner). The
+  registry raises every refusal before it calls `spec.run()`, so nothing was
+  opened; the path defends against a provider that violates that anyway by
+  cancelling the producer and marking `opened` handled.
+- `JobKindMap` declaration-merged with `'claude-code'`; spec is
+  `{ kind, label: <prompt-derived one-liner>, ...(exec.agent ? { owner: exec.agent } : {}), run }`.
+- **The job IS the session**, not just its first turn: `run()` starts the open
+  asynchronously and returns hooks synchronously; `cancel` is a sync, idempotent
+  close request; `done` settles on session close (`killed` after a cancel,
+  `completed` otherwise, `failed` when the open itself failed) and **never
+  rejects**; `readOutput` is a **consuming delta** of each completed turn's
+  final text (not final-output-only: a background session accepts follow-ups, so
+  final-output-only would hide every turn after the first).
+- The tool awaits the minted session id before returning
+  `{ kind: 'background', jobId, ccSessionId }`, so a caller never parses prose
+  for an id. A background open whose `open()` fails reports that failure to the
+  caller AND leaves a job that settled `failed` — visible in `job_list`.
+
+**Errors.** The tool layer adds `ClaudeCodeToolError` (`HarnessError`, name
+`ClaudeCodeToolError`) with codes `CC_NO_SESSION`, `CC_TIMEOUT`, `CC_NO_JOBS`,
+`CC_ABORTED`, `CC_JOB_REJECTED`. Everything the SEAM refuses (`INVALID_CWD`, `SESSION_LIMIT`,
+`SESSION_EXISTS`, `BACKEND_ERROR`, `SESSION_CLOSED`, …) is re-thrown untouched:
+its `code` is what a caller routes on, and re-wrapping would bury it.
+
+**`context_usage`** is derived from the latest result's `usage`
+(`input_tokens + cache_read + cache_creation + output_tokens`) with `max_tokens`
+from `modelUsage[*].contextWindow` — the cheapest REAL source, documented as an
+approximation (a snapshot of the last completed turn, not a live meter). It is
+ABSENT until a turn has reported usage; `CcSessionSnapshot.contextUsage` wins
+whenever a future phase starts populating it.
+
 ### 4.5 Configuration
 
 ```ts
@@ -1123,6 +1221,83 @@ whole channel exists to hold.
     to `planFilePath`. And `CcAskRules.add()` rewrote its own possibly-stale
     in-memory view, so a second session sharing the store could delete a grant
     the first had just written — it now re-reads and merges before writing.
+
+### Phase 5 additions and deviations
+
+23. **`claude_code_cancel`'s default flipped to `keep_queued: true`.** Phase 1's
+    description said the default suppressed queued sends. It now matches the
+    seam (`interrupt({ keepQueued: keep_queued ?? true })`): the default cancels
+    the RUNNING turn only, and `keep_queued: false` additionally drives the
+    emulated drain. Rationale: suppression is the surprising, lossy option, and
+    the emulation costs extra interrupts — neither belongs in a default. The
+    tool description and the README were corrected with it.
+24. **No `exec.agent.inject()` progress pushes.** §6 asked for CC progress to be
+    injected into the delegating agent. That note is redundant now that a
+    background session is a dsh job: `@deepseek-ai/dsh-tool-jobs` already
+    delivers the completion notice to the owning agent (injected into a busy
+    owner, waking an idle one, bounded per owner by `maxConsecutiveWakes`). A
+    second notice path from this plugin would double every message and bypass
+    those bounds. Synchronous mode needs no progress channel at all — it returns
+    the answer. **Deliberate deviation; nothing else in §6 changed.**
+25. **`claude_code_open` does not hand `prompt` to the seam.** See §4.4e: the
+    prompt is sent AFTER the mirror is attached, because the id the dsh session
+    must share does not exist until `open()` returns. `open({ prompt })` remains
+    correct for a caller that drives the seam directly with a session it created
+    itself.
+26. **A background open registers its job BEFORE the session exists.** `run()`
+    must return hooks synchronously, so the open runs inside it and the tool
+    awaits the minted id. Consequence: an open that fails (e.g. `INVALID_CWD`)
+    still leaves a `failed` job in `job_list`. The alternative — open first,
+    then `start()` — would have to close a live session when `start()` throws
+    (per-owner cap, no controller) and would put a spawn ahead of the
+    pre-publication abort check.
+27. **A dead subprocess does not settle a background job.** `CcSession` reaches
+    `closed` only through `close()`, so a subprocess that dies on its own leaves
+    the job `running` until something closes the session (`claude_code_close`,
+    `job_kill`, owner disposal, plugin teardown). Tracked as deferred work in
+    the tool package README.
+28. **The tool package gained one dependency:** `@deepseek-ai/dsh-jobs@0.1.0-rc.7`
+    as peer + dev (types and the `JobKindMap` merge only — no runtime import).
+    `@deepseek-ai/dsh-jobs-local` and `@deepseek-ai/dsh-tool-jobs` were added as
+    ROOT devDependencies for the composition test. No other pin moved.
+
+### Defects the Phase 5 verify pass (Stage 3) found
+
+29. **A refused `ctx.jobs.start()` reached the model with no routable code.**
+    The registry refuses with a bare `Error` — good prose ("background job limit
+    reached for this owner (limit: 10); use job_kill…"), no `code`, no `info` —
+    which made the per-owner cap the ONLY failure on this tool's surface a
+    caller could not route on, while every neighbouring failure carried one.
+    Fixed by re-raising it as `CC_JOB_REJECTED` (a new tool-layer code) with the
+    registry's wording preserved verbatim and the original kept as `cause`.
+    Covered by `tests/background.spec.ts`.
+30. **A registry that threw AFTER calling `run()` would have orphaned a live
+    session.** `@deepseek-ai/dsh-jobs-local` raises every refusal before
+    `spec.run()`, so this is a third-party contract violation rather than an
+    observed bug — but the cost of trusting the contract is a subprocess no job
+    tracks plus an unhandled rejection from the `opened` promise nobody awaits
+    any more. The refusal path now cancels the producer (idempotent, a no-op
+    when nothing started) and marks `opened` handled. Covered by a spec that
+    scripts exactly that violation, and verified to FAIL without the fix.
+31. **The jobs-ABSENT composition was untested end to end.** `tests/composition`
+    booted only the jobs-mounted `cordis.yml`. A sibling `cordis-no-jobs.yml`
+    now boots the same rows without `dsh-jobs-local`/`dsh-tool-jobs` and pins
+    the supported shape: all six tools register, no `job_*` tool does,
+    `ctx.jobs` is undefined, and `background: true` with a VALID `cwd` fails
+    `CC_NO_JOBS` having spawned nothing (proving the jobs check precedes the
+    open).
+
+Orderings the Stage 3 probe pinned and found already correct (no fix needed,
+`tests/orderings.spec.ts`): a `claude_code_close` during a parked synchronous
+open fails that open with the seam's `SESSION_CLOSED` rather than hanging to the
+10-minute cap; every session-taking tool answers `CC_NO_SESSION` after a close,
+not just for an unknown id; a `claude_code_wait` whose timeout races the result
+returns exactly one of the two outcomes and leaves the session usable (a second
+wait resolves from cache); a cancel of an already-idle turn is a no-op, not an
+error; and a mid-turn teardown settles the background job `completed` with no
+unhandled rejection. Aborting the caller's tool call AFTER the job id is
+published leaves the session running and the job unsettled — the D10 rule,
+asserted directly.
 
 ## 6. Verification before you report
 
