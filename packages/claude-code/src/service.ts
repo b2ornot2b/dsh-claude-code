@@ -1,23 +1,31 @@
 /**
- * The `ctx.claudeCode` service: the seam every consumer talks to, and (from
- * Phase 2) the owner of every live Claude Code session in a composition.
+ * The `ctx.claudeCode` service: the seam every consumer talks to, and — from
+ * Phase 2 — the owner of every live Claude Code session in a composition.
  *
- * Phase 1 holds the validated configuration and an empty session registry;
- * `open()` and `accountInfo()` reject with `NOT_IMPLEMENTED`.
+ * It holds the validated configuration, the session registry, the warm pool and
+ * the teardown effect that guarantees no subprocess outlives the plugin.
  *
  * @module @deepseek-ai/dsh-claude-code
  */
+
+import { statSync } from 'node:fs'
+import { isAbsolute } from 'node:path'
 
 import { Service } from '@deepseek-ai/cordis'
 import type { Context } from '@deepseek-ai/cordis'
 import type z from '@deepseek-ai/schemastery'
 
+import { realBackend } from './backend.ts'
+import type { CcCanUseTool, QueryBackend } from './backend.ts'
 import { Config as ConfigSchema, resolveClaudeCodeConfig } from './config.ts'
 import type { ClaudeCodeConfig, ResolvedClaudeCodeConfig } from './config.ts'
-import { ClaudeCodeError } from './types.ts'
+import { WarmPool } from './prewarm.ts'
+import { CcSession, resolveQueryOptions } from './session.ts'
+import type { CcSessionDeps } from './session.ts'
+import { ClaudeCodeError, newCcSessionId } from './types.ts'
 import type {
-  CcAccountInfo, CcContextUsage, CcOpenOptions, CcSessionId, CcSessionSnapshot, CcSessionStatus,
-  ClaudeCode,
+  CcAccountInfo, CcContextUsage, CcLogger, CcOpenOptions, CcSessionId, CcSessionSnapshot,
+  CcSessionStatus, ClaudeCode,
 } from './types.ts'
 
 declare module '@deepseek-ai/cordis' {
@@ -49,12 +57,31 @@ interface CcSessionRecord {
   model?: string
   pendingAsks: number
   contextUsage?: CcContextUsage
+  /** The live actor, when this record is backed by one (always, outside white-box tests). */
+  session?: CcSession
   /** Settle pending asks as denied, then close the SDK query. Must be idempotent. */
   close(): Promise<void>
 }
 
-/** Message used by every Phase 1 stub, so the phase that lands the behavior is always named. */
-const NOT_IMPLEMENTED_SUFFIX = 'lands in Phase 2 (the session actor); the Phase 1 scaffold owns configuration and the session registry only'
+/**
+ * Everything `open()` may be told to override per call, plus the injectable
+ * seams a test replaces. Not part of the public surface: consumers open sessions
+ * with {@link CcOpenOptions} and get the composition's configured behavior.
+ */
+export interface ClaudeCodeServiceDeps {
+  /** The SDK boundary. Defaults to {@link realBackend}; unit tests inject a fake. */
+  readonly backend?: QueryBackend
+  /** The permission router. Phase 4 installs the real one; omitted means fail-closed deny. */
+  readonly canUseTool?: CcCanUseTool
+  /**
+   * Resolve the API key referenced by `config.apiKeyRef` under `auth: 'api-key'`.
+   * Phase 5 wires `ctx.credentials`.
+   * @returns the key, or undefined when none can be resolved.
+   */
+  readonly resolveApiKey?: () => Promise<string | undefined>
+  /** Drain-loop poll interval handed to each session (tests shrink it). */
+  readonly drainPollMs?: number
+}
 
 /**
  * `ctx.claudeCode` — the Claude Code capability seam. Definition and provider
@@ -71,33 +98,148 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
   /** Live sessions by id, in open order (`Map` preserves insertion order). */
   private readonly sessions = new Map<CcSessionId, CcSessionRecord>()
 
+  /** Injectable seams: the SDK boundary, the permission router, the credential hook. */
+  private readonly deps: ClaudeCodeServiceDeps
+
+  /** At most one pre-warmed subprocess for the next matching `open()`. */
+  private readonly pool: WarmPool
+
+  /** Diagnostics sink handed to every session (subprocess stderr lands here). */
+  private readonly log: CcLogger
+
   /**
    * @param ctx - the context that owns the service; disposal closes every session.
    * @param config - surface configuration; defaults are resolved here so a
    *   hand-mounted service behaves exactly like a `cordis.yml` row.
+   * @param deps - injectable seams. Production passes nothing; unit tests pass a
+   *   fake backend so a full session lifecycle runs offline.
    */
-  constructor(ctx: Context, config: ClaudeCodeConfig = {}) {
+  constructor(ctx: Context, config: ClaudeCodeConfig = {}, deps: ClaudeCodeServiceDeps = {}) {
     super(ctx, 'claudeCode')
     this.config = resolveClaudeCodeConfig(config)
+    this.deps = deps
+    // `ctx.logger` is read through the raw context ONCE, into a plain closure:
+    // cordis hands out a fresh traceable proxy per access and a long-lived
+    // session must not hold one.
+    const logger = ctx.logger
+    this.log = { debug: (message: string) => { logger.debug(message) } }
+    this.pool = new WarmPool({
+      backend: deps.backend ?? realBackend,
+      enabled: this.config.prewarm,
+      logger: this.log,
+    })
 
     // Every session's lifetime is owned by this fiber: unloading the plugin
     // (HMR, teardown, a failed mount) must not leave a Claude Code subprocess
     // holding a permission callback nobody will ever answer.
     ctx.effect(() => async () => {
+      await this.pool.close()
       await this.closeAll()
     }, 'claudeCode:sessions')
   }
 
   /**
    * Open (or resume, or fork) a Claude Code session.
+   *
+   * The id is minted HERE (or adopted from the warm pool, which pre-minted one)
+   * and handed to both dsh and the SDK — there is no id map in either direction.
+   *
    * @param options - working directory, first prompt, model, permission mode, resume/fork.
-   * @returns the new session's snapshot.
-   * @throws {ClaudeCodeError} code `NOT_IMPLEMENTED` in Phase 1.
+   * @returns the new session's snapshot, taken after the initialize handshake.
+   * @throws {ClaudeCodeError} code `INVALID_CWD` when `cwd` is not an existing
+   *   absolute directory (checked BEFORE anything spawns), `SESSION_LIMIT` when
+   *   `limits.maxConcurrentSessions` is already reached, `SESSION_EXISTS` when a
+   *   plain resume targets a session that is still open here, or `BACKEND_ERROR`
+   *   when the SDK fails to start the session.
    */
-  open(options: CcOpenOptions): Promise<CcSessionSnapshot> {
-    return Promise.reject(new ClaudeCodeError(
-      `claude-code: open(${JSON.stringify(options.cwd)}) ${NOT_IMPLEMENTED_SUFFIX}`,
-      'NOT_IMPLEMENTED'))
+  async open(options: CcOpenOptions): Promise<CcSessionSnapshot> {
+    assertUsableCwd(options.cwd)
+    const limit = this.config.limits.maxConcurrentSessions
+    if (this.sessions.size >= limit) {
+      throw new ClaudeCodeError(
+        `claude-code: cannot open another session, limits.maxConcurrentSessions (${limit}) is reached`,
+        'SESSION_LIMIT')
+    }
+
+    // A plain resume continues under the id it resumes (see below), so it would
+    // otherwise overwrite that session's registry entry and strand its
+    // subprocess — two live queries driving one CC transcript.
+    if (options.resume !== undefined && options.fork !== true && this.sessions.has(options.resume)) {
+      throw new ClaudeCodeError(
+        `claude-code: session ${options.resume} is already open in this context; send to it or close it `
+        + 'before resuming (a plain resume continues under the SAME id)',
+        'SESSION_EXISTS')
+    }
+
+    // The pool template is deliberately resume-FREE. `warmFingerprint` excludes
+    // `resume`/`forkSession` (so a pre-minted id can be adopted), which means a
+    // subprocess warmed with either one baked in would be indistinguishable from
+    // a plain one and could silently continue somebody else's transcript. A warm
+    // handle is therefore always a PLAIN session of this shape: the equality key
+    // for `acquire()` and the recipe for the next `prewarm()`, both.
+    const poolShape = {
+      cwd: options.cwd,
+      ...(options.model === undefined ? {} : { model: options.model }),
+      ...(options.permissionMode === undefined ? {} : { permissionMode: options.permissionMode }),
+    }
+    const shape = {
+      ...poolShape,
+      ...(options.resume === undefined ? {} : { resume: options.resume }),
+      ...(options.fork === undefined ? {} : { fork: options.fork }),
+    }
+    const mintedId = newCcSessionId()
+    const template = await resolveQueryOptions(
+      { id: mintedId, ...poolShape }, this.sessionDeps(), new AbortController())
+
+    // A resumed or forked session can never be served warm: `resume`/`forkSession`
+    // are fixed at startup and the pool never warms with them. On a hit the
+    // pool's PRE-MINTED id wins — it is still a dsh-minted id, just minted early.
+    const lease = options.resume === undefined ? this.pool.acquire(template) : undefined
+    // A plain resume (no fork) continues under the SAME id it is resuming —
+    // the SDK forbids sending a caller-supplied `sessionId` alongside `resume`
+    // unless `forkSession` is also set (verified live), so `resolveQueryOptions`
+    // sends `resume` alone and the CLI echoes back `options.resume` itself. A
+    // fork always gets a fresh mint (spike 1: the SDK honors OUR id for the fork).
+    const id = lease?.sessionId
+      ?? (options.resume !== undefined && options.fork !== true ? options.resume : mintedId)
+
+    const session = new CcSession(
+      { id, ...shape },
+      { ...this.sessionDeps(), ...(lease === undefined ? {} : { warm: lease }) })
+
+    const record: CcSessionRecord = {
+      id,
+      status: 'starting',
+      pendingAsks: 0,
+      session,
+      close: async () => {
+        await session.close()
+      },
+    }
+    this.sessions.set(id, record)
+    // A session that closes for ANY reason (an explicit close, teardown, a dead
+    // subprocess) drops out of the registry: `list()` reports live sessions only.
+    session.onClose(() => {
+      if (this.sessions.get(id) === record) this.sessions.delete(id)
+    })
+
+    try {
+      await session.open()
+    } catch (error) {
+      this.sessions.delete(id)
+      throw error
+    }
+
+    if (options.prompt !== undefined) session.send(options.prompt, { mode: 'followup' })
+
+    // Prepare the NEXT session while this one runs, always as a PLAIN session of
+    // this shape (see the template above). The first open of any given shape is
+    // always cold: a subprocess cannot be warmed before its `cwd` is known.
+    // Failures are swallowed inside the pool — a cold open is a latency
+    // regression, never an error.
+    void this.pool.prewarm(template)
+
+    return session.snapshot()
   }
 
   /**
@@ -136,13 +278,64 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
 
   /**
    * Which authentication is live for this composition.
-   * @returns the account projection.
-   * @throws {ClaudeCodeError} code `NOT_IMPLEMENTED` in Phase 1.
+   *
+   * Answered from the FIRST live session's cached initialize response — the
+   * account comes back with the handshake, so this costs nothing. It deliberately
+   * opens nothing: spawning a subprocess to answer a status question would spend
+   * a subscription slot (and ~2s) on a read-only call.
+   *
+   * @returns the account projection, with `auth` reporting the mode this service
+   *   built the environment for (what we intended) alongside what the CLI reports
+   *   (what actually happened) — a mismatch is the silent-billing smoking gun.
+   * @throws {ClaudeCodeError} code `NO_LIVE_SESSION` when no session is open.
+   *   Open one first; there is no cheaper way to ask the CLI who it is.
    */
-  accountInfo(): Promise<CcAccountInfo> {
-    return Promise.reject(new ClaudeCodeError(
-      `claude-code: accountInfo() ${NOT_IMPLEMENTED_SUFFIX}`,
-      'NOT_IMPLEMENTED'))
+  async accountInfo(): Promise<CcAccountInfo> {
+    for (const record of this.sessions.values()) {
+      const account = record.session?.account
+      if (account === undefined) continue
+      return await Promise.resolve({
+        auth: this.config.auth,
+        ...(account.email === undefined ? {} : { email: account.email }),
+        ...(account.organization === undefined ? {} : { organization: account.organization }),
+        ...(account.subscriptionType === undefined ? {} : { subscriptionType: account.subscriptionType }),
+        ...(account.apiProvider === undefined ? {} : { apiProvider: account.apiProvider }),
+      })
+    }
+    throw new ClaudeCodeError(
+      'claude-code: accountInfo() needs at least one live session — the account arrives with a session\'s '
+      + 'initialize handshake, and this call never spawns a subprocess of its own',
+      'NO_LIVE_SESSION')
+  }
+
+  /**
+   * Look up the live actor behind a registered session.
+   *
+   * This is the handle Phase 3 (mirror), Phase 5 (tools) and Phase 6 (the agent
+   * adapter) drive: `send`, `interrupt`, `waitForResult`, `onMessage`. The
+   * snapshot from {@link ClaudeCodeService.get} stays the value projection for
+   * anything that crosses a tool boundary.
+   *
+   * @param id - the shared dsh/CC session id.
+   * @returns the session actor, or undefined when the id is unknown.
+   */
+  session(id: CcSessionId): CcSession | undefined {
+    return this.sessions.get(id)?.session
+  }
+
+  /**
+   * The dependency bundle every session is constructed with.
+   * @returns the session deps derived from this service's config and injections.
+   */
+  private sessionDeps(): CcSessionDeps {
+    return {
+      backend: this.deps.backend ?? realBackend,
+      config: this.config,
+      logger: this.log,
+      ...(this.deps.canUseTool === undefined ? {} : { canUseTool: this.deps.canUseTool }),
+      ...(this.deps.resolveApiKey === undefined ? {} : { resolveApiKey: this.deps.resolveApiKey }),
+      ...(this.deps.drainPollMs === undefined ? {} : { drainPollMs: this.deps.drainPollMs }),
+    }
   }
 
   /**
@@ -176,12 +369,44 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
  * @returns the serializable snapshot.
  */
 function snapshot(record: CcSessionRecord): CcSessionSnapshot {
+  // A record backed by a live actor reports the actor's state: status, model and
+  // context usage all move underneath the registry.
+  const live = record.session?.snapshot()
+  if (live !== undefined) return live
   return {
     id: record.id,
     status: record.status,
     ...(record.model === undefined ? {} : { model: record.model }),
     pendingAsks: record.pendingAsks,
     ...(record.contextUsage === undefined ? {} : { contextUsage: record.contextUsage }),
+  }
+}
+
+/**
+ * Refuse a working directory the SDK could only fail on, BEFORE anything spawns.
+ *
+ * A relative or missing `cwd` is the most common way a tool call goes wrong, and
+ * paying a subprocess spawn to discover it costs ~2s and a subscription slot.
+ * @param cwd - the requested working directory.
+ * @throws {ClaudeCodeError} code `INVALID_CWD`.
+ */
+function assertUsableCwd(cwd: string): void {
+  if (cwd.length === 0 || !isAbsolute(cwd)) {
+    throw new ClaudeCodeError(
+      `claude-code: cwd must be an absolute path, got ${JSON.stringify(cwd)}`, 'INVALID_CWD')
+  }
+  let directory = false
+  try {
+    directory = statSync(cwd).isDirectory()
+  } catch (error) {
+    throw new ClaudeCodeError(
+      `claude-code: cwd ${JSON.stringify(cwd)} cannot be used: ${error instanceof Error ? error.message : String(error)}`,
+      'INVALID_CWD',
+      { cause: error })
+  }
+  if (!directory) {
+    throw new ClaudeCodeError(
+      `claude-code: cwd ${JSON.stringify(cwd)} is not a directory`, 'INVALID_CWD')
   }
 }
 

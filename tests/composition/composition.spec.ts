@@ -228,13 +228,38 @@ describe('phase 1 acceptance: real cordis.yml + Loader composition', () => {
     expect(failures.map(record => String(record.args?.[0] ?? '')), 'no errors logged during boot').toEqual([])
   })
 
-  it('surfaces NOT_IMPLEMENTED only on invocation, as a typed error', async () => {
-    await expect(ctx.claudeCode.open({ cwd: '/tmp/phase1-acceptance' }))
-      .rejects.toMatchObject({ name: 'ClaudeCodeError', code: 'NOT_IMPLEMENTED' })
+  it('validates an open() before anything can spawn, and starts with an empty registry', async () => {
+    // Phase 2 made `open()` real, so this test may never call it with usable
+    // arguments: a valid `cwd` would spawn a Claude Code subprocess and this
+    // suite is offline. A relative `cwd` is refused by the guard that runs
+    // BEFORE the SDK is touched, which is exactly what we want to pin here.
+    await expect(ctx.claudeCode.open({ cwd: 'relative/not-allowed' }))
+      .rejects.toMatchObject({ name: 'ClaudeCodeError', code: 'INVALID_CWD' })
 
-    // The registry side of the seam is real already, so a Phase 5 tool body has
-    // somewhere to write to.
+    // Same for the account projection: it never opens a session of its own.
+    await expect(ctx.claudeCode.accountInfo())
+      .rejects.toMatchObject({ name: 'ClaudeCodeError', code: 'NO_LIVE_SESSION' })
+
     expect(ctx.claudeCode.list()).toEqual([])
+  })
+
+  it('keeps the Claude Agent SDK out of every published type surface', async () => {
+    // The seam is the ONLY package allowed to import the SDK, and no consumer
+    // may need it on its dependency graph to type-check against us. `lib/types`
+    // is what a consumer's compiler reads, so assert on the built artifact.
+    const { readdirSync, readFileSync } = await import('node:fs')
+    const offenders: string[] = []
+    for (const pkg of ['claude-code', 'tool-claude-code', 'claude-code-agent']) {
+      const dir = path.join(repoRoot, 'packages', pkg, 'lib', 'types')
+      for (const entry of readdirSync(dir, { recursive: true, encoding: 'utf8' })) {
+        if (!entry.endsWith('.d.ts')) continue
+        const source = readFileSync(path.join(dir, entry), 'utf8')
+        // Comments may name the SDK; type positions may not.
+        const stripped = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+        if (stripped.includes('@anthropic-ai/claude-agent-sdk')) offenders.push(`${pkg}/${entry}`)
+      }
+    }
+    expect(offenders).toEqual([])
   })
 
   it('tears the whole composition down on dispose', async () => {

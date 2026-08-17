@@ -7,8 +7,32 @@
  * list (harness post-mortem 0001, "export default drops the plugin's inject").
  * `tests/exports.spec.ts` asserts the absence of a default export.
  *
+ * Nothing exported here references a Claude Agent SDK type. The SDK boundary is
+ * `src/backend.ts`, which re-states in this seam's own vocabulary exactly the
+ * shapes we use — so consumer packages never need the SDK on their dependency
+ * graph, and `lib/types/**` stays SDK-free (asserted by the build).
+ *
  * @module @deepseek-ai/dsh-claude-code
  */
+
+export { realBackend } from './backend.ts'
+export type {
+  CcAccountData,
+  CcBackendQuery,
+  CcCanUseTool,
+  CcInitializeResult,
+  CcInterruptReceipt,
+  CcModelInfoEntry,
+  CcPermissionDecision,
+  CcPermissionRequest,
+  CcQueryOptions,
+  CcSdkMessage,
+  CcSdkUserMessage,
+  CcSlashCommandInfo,
+  CcUuid,
+  CcWarmQuery,
+  QueryBackend,
+} from './backend.ts'
 
 export {
   Config,
@@ -25,7 +49,30 @@ export type {
   ResolvedClaudeCodeConfig,
 } from './config.ts'
 
+export { createInputStream } from './input-stream.ts'
+export type { CcInputStream, CcUserMessageInit } from './input-stream.ts'
+
+export { WarmPool, warmFingerprint } from './prewarm.ts'
+export type { CcWarmLease, WarmPoolDeps } from './prewarm.ts'
+
+export { buildSessionEnv, CcSession, resolveQueryOptions } from './session.ts'
+export type {
+  CcInterruptOptions,
+  CcInterruptOutcome,
+  CcMessageEnvelope,
+  CcMessageListener,
+  CcMessageMeta,
+  CcOutboxEntry,
+  CcOutboxState,
+  CcQueryOptionDeps,
+  CcSendMode,
+  CcSendOptions,
+  CcSessionDeps,
+  CcSessionOptions,
+} from './session.ts'
+
 export { apply, ClaudeCodeService, inject, name } from './service.ts'
+export type { ClaudeCodeServiceDeps } from './service.ts'
 
 export {
   ASK_FALLBACKS,
@@ -43,6 +90,7 @@ export type {
   CcAuthMode,
   CcContextUsage,
   CcErrorCode,
+  CcLogger,
   CcOpenOptions,
   CcPermissionMode,
   CcSessionId,

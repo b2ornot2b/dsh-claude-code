@@ -74,31 +74,43 @@ describe('ClaudeCodeService mounting', () => {
   })
 })
 
-describe('ClaudeCodeService Phase 1 surface', () => {
-  it('rejects open() with NOT_IMPLEMENTED naming the phase', async () => {
+describe('ClaudeCodeService open() guards', () => {
+  it('refuses a relative cwd before anything spawns', async () => {
     const { ctx, fiber, service } = await mount()
     try {
-      const error = await service.open({ cwd: '/tmp/project' }).then(
+      const error = await service.open({ cwd: 'relative/project' }).then(
         () => undefined,
         (reason: unknown) => reason)
       expect(error).toBeInstanceOf(ClaudeCodeError)
-      expect((error as ClaudeCodeError).code).toBe('NOT_IMPLEMENTED')
-      expect((error as ClaudeCodeError).message).toContain('Phase 2')
-      expect((error as ClaudeCodeError).message).toContain('/tmp/project')
+      expect((error as ClaudeCodeError).code).toBe('INVALID_CWD')
+      expect(service.list()).toEqual([])
     } finally {
       await fiber.dispose()
       await ctx.fiber.dispose()
     }
   })
 
-  it('rejects accountInfo() with NOT_IMPLEMENTED', async () => {
+  it('refuses a cwd that does not exist', async () => {
+    const { ctx, fiber, service } = await mount()
+    try {
+      const error = await service.open({ cwd: '/definitely/not/here/cc-phase2' }).then(
+        () => undefined,
+        (reason: unknown) => reason)
+      expect((error as ClaudeCodeError).code).toBe('INVALID_CWD')
+    } finally {
+      await fiber.dispose()
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it('rejects accountInfo() with NO_LIVE_SESSION when nothing is open', async () => {
     const { ctx, fiber, service } = await mount()
     try {
       const error = await service.accountInfo().then(
         () => undefined,
         (reason: unknown) => reason)
       expect(error).toBeInstanceOf(ClaudeCodeError)
-      expect((error as ClaudeCodeError).code).toBe('NOT_IMPLEMENTED')
+      expect((error as ClaudeCodeError).code).toBe('NO_LIVE_SESSION')
     } finally {
       await fiber.dispose()
       await ctx.fiber.dispose()

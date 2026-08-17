@@ -14,6 +14,24 @@ and `pnpm -r typecheck`, `tsc -p tsconfig.tests.json`, and `vitest run` are
 green. Updated at the Stage 3 merge point, where the whole workspace was
 verified together and the Phase 1 acceptance test (§7) landed.
 
+**Updated by Phase 2, Stage 1 (the session actor).** §4 now carries the live
+surface: `CcSession`, the `onMessage` envelope, `waitForResult`, the three send
+modes, the warm pool, and the SDK-free backend seam. Everything Phase 1 froze is
+still here and still true, with two corrections called out in §5a: `open()` and
+`accountInfo()` no longer answer `NOT_IMPLEMENTED`, and unit specs did not
+actually resolve to `src/` until a `tests/tsconfig.json` was added per package.
+
+**Updated again by Phase 2, Stages 2–3 (the live suite and the merge point).**
+A gated live integration suite (`packages/claude-code/tests/live/`, run by
+`pnpm run test:live`, which sets `DSH_CC_LIVE=1`) exercises the real SDK against
+a real subprocess; `pnpm test` stays offline because every live spec is
+`describe.skipIf(!LIVE)`. Running it found four real defects, all fixed and all
+recorded in §5a — the two the live run itself surfaced (a plain resume was
+rejected by the SDK at spawn; the warm fingerprint was invalidated by the SDK's
+own `process.env` write) and the two the review of those fixes surfaced (a warm
+subprocess could be seeded with `resume`/`forkSession` baked in; a plain resume
+of a live session overwrote its registry entry).
+
 ---
 
 ## 1. Hard rules (non-negotiable, each one is a real production bug)
@@ -192,9 +210,17 @@ packages on deliberately different planes:
 
 ## 4. The seam's exact export surface
 
-`import { … } from '@deepseek-ai/dsh-claude-code'`. Seventeen runtime exports
-(pinned by `packages/claude-code/tests/exports.spec.ts`) and the types below.
-Nothing else exists; nothing else will be added without updating this document.
+`import { … } from '@deepseek-ai/dsh-claude-code'`. **Twenty-four** runtime
+exports (pinned by `packages/claude-code/tests/exports.spec.ts` — Phase 2 added
+`CcSession`, `WarmPool`, `realBackend`, `createInputStream`, `resolveQueryOptions`,
+`buildSessionEnv`, `warmFingerprint`) plus the types below. Nothing else exists;
+nothing else will be added without updating this document.
+
+**No export references a Claude Agent SDK type.** `src/backend.ts` re-states, in
+this seam's own vocabulary, exactly the SDK shapes we use, and the real backend
+passes our objects to `query()`/`startup()` with **no casts** — so the compiler
+proves the restatement matches the installed SDK, and `lib/types/**` stays
+SDK-free (asserted by `tests/composition/composition.spec.ts`).
 
 ### 4.1 Service
 
@@ -226,20 +252,22 @@ declare module '@deepseek-ai/cordis' {
 To see `ctx.claudeCode` in a file that imports no runtime value from the seam,
 use a side-effect type import: `import type {} from '@deepseek-ai/dsh-claude-code'`.
 
-**Phase 1 behavior you must code against:**
+**Phase 2 behavior you must code against** (Phase 1's `NOT_IMPLEMENTED` rows are
+gone; `session(id)` is new):
 
-| Call | Phase 1 |
+| Call | Phase 2 |
 |---|---|
-| `open(...)` | **rejects** with `ClaudeCodeError`, `code === 'NOT_IMPLEMENTED'`, message naming Phase 2 |
-| `accountInfo()` | **rejects** with `ClaudeCodeError`, `code === 'NOT_IMPLEMENTED'` |
-| `get(id)` | `undefined` (registry is always empty) |
-| `list()` | `[]` (a fresh array each call) |
-| `close(id)` | `false` (unknown id) |
-| `config` | fully resolved; safe to read now |
+| `open(options)` | opens/resumes/forks a real session and resolves with its snapshot. Rejects `INVALID_CWD` (relative or missing `cwd`, checked before any spawn), `SESSION_LIMIT` (`limits.maxConcurrentSessions` reached), `SESSION_EXISTS` (a plain resume of a session still open here), `BACKEND_ERROR` (the SDK could not start) |
+| `get(id)` | the LIVE snapshot (status/model move under you), `undefined` when unknown |
+| `list()` | every live session in open order, fresh array each call |
+| `close(id)` | `true` when a session was closed, `false` for an unknown id; idempotent |
+| `session(id)` | the `CcSession` actor, or `undefined`. **A handle, not a value** — never put it in a tool result, never identity-compare it across a service access |
+| `accountInfo()` | the first live session's cached account; rejects `NO_LIVE_SESSION` when nothing is open (it never spawns a session to answer) |
+| `config` | fully resolved; safe to read |
 
-So consumer packages are **stubs with real shapes**: register real tool
-definitions / a real adapter skeleton, wire real config, and let the
-`NOT_IMPLEMENTED` rejection surface as a clean tool error. Do not fake sessions.
+A consumer written against Phase 1 still compiles: nothing was removed. What
+changed is that the rejections are now *situational* rather than universal, so a
+tool body must route on `error.code` instead of assuming `NOT_IMPLEMENTED`.
 
 ### 4.2 Plugin namespace exports
 
@@ -309,9 +337,18 @@ tool's canonical JSON return.
 
 ### 4.4 Errors
 
+Phase 2 ADDED codes; none was removed or renamed, so a Phase 1 consumer's
+`switch` still compiles and still matches what it matched before.
+
 ```ts
 type CcErrorCode = 'NOT_IMPLEMENTED' | 'UNKNOWN_SESSION' | 'SESSION_LIMIT'
+                 | 'SESSION_EXISTS'        // a plain resume of a session still open here
                  | 'INVALID_SESSION_ID' | 'INVALID_CONFIG'
+                 | 'SESSION_CLOSED'        // sends/interrupts/waiters on a closed session
+                 | 'INVALID_CWD'           // relative or missing cwd — raised BEFORE any spawn
+                 | 'NO_LIVE_SESSION'       // accountInfo() with an empty registry
+                 | 'TIMEOUT'               // waitForResult(timeoutMs) elapsed; session untouched
+                 | 'BACKEND_ERROR'         // the SDK could not start/drive the session; see `cause`
 
 class ClaudeCodeError extends HarnessError {              // HarnessError from @deepseek-ai/dsh-llm
   constructor(message: string, code: CcErrorCode, options?: ErrorOptions)
@@ -319,6 +356,107 @@ class ClaudeCodeError extends HarnessError {              // HarnessError from @
   readonly name: 'ClaudeCodeError'
 }
 ```
+
+### 4.4b The session actor (Phase 2)
+
+`ctx.claudeCode.session(id)` returns the live actor. Snapshots remain the value
+projection for anything crossing a tool boundary; this is a handle.
+
+```ts
+class CcSession {
+  readonly id: CcSessionId
+  get status(): CcSessionStatus        // 'starting' -> 'idle' <-> 'running' -> 'closed'
+  get pendingAsks(): number            // 0 until Phase 4
+  get capabilities(): readonly string[]        // from the LATEST system/init — feature-detect on these
+  get initializeResult(): CcInitializeResult | undefined   // commands, models, account, output_style
+  get account(): CcAccountData | undefined
+  get lastResult(): CcMessageEnvelope | undefined
+  outbox(): readonly CcOutboxEntry[]
+  snapshot(): CcSessionSnapshot
+
+  open(): Promise<void>                        // the service calls this; consumers do not
+  send(input: string | { content: string, uuid?: CcUuid }, options?: CcSendOptions): CcUuid
+  waitForResult(timeoutMs?: number): Promise<CcMessageEnvelope>
+  interrupt(options?: CcInterruptOptions): Promise<CcInterruptOutcome>
+  onMessage(listener: CcMessageListener): () => void
+  onClose(listener: () => void): () => void
+  close(): Promise<void>               // idempotent
+}
+```
+
+**Send modes** (`{ mode }`, default `'followup'`), each returning the stamped uuid:
+
+| mode | SDK mechanism | semantics |
+|---|---|---|
+| `followup` | plain uuid-stamped message | queues; runs as its own next turn |
+| `steer` | `priority: 'now'` | **aborts** the running turn and refolds both instructions into ONE fresh turn. The aborted turn emits an `error_during_execution` result that is an internal artifact — the envelope flags it, and the mirror must suppress it. Turn-1 tokens are re-paid |
+| `inject` | `shouldQuery: false` | appended to the transcript, starts no turn; committed immediately |
+
+**The fan-out envelope** — subscribe with `onMessage`; the payload is
+`{ message, meta }`, never a bare message:
+
+```ts
+interface CcMessageEnvelope { readonly message: CcSdkMessage, readonly meta: CcMessageMeta }
+interface CcMessageMeta {
+  readonly sessionId: CcSessionId
+  readonly receivedAt: number
+  readonly interruptArtifact: boolean   // the abort result produced by a `steer` — suppress it
+  readonly interruptedTurn: boolean     // the abort result of ANY turn we cancelled (steer or interrupt)
+  readonly reinit: boolean              // a system/init that is NOT the first (normal after an interrupt)
+}
+```
+
+`interruptArtifact ⊂ interruptedTurn`. Both a `steer` send and an explicit
+`interrupt()` abort the running turn with an `error_during_execution` result
+(spikes 2 and 3 observed the identical shape), so both are flagged
+`interruptedTurn` — a mirror renders those as *cancelled*, never as a failed
+turn. Only a steer's is additionally an *artifact*: suppressed from
+`lastResult`/`waitForResult` because the refolded turn's real result is still
+coming. An `interrupt()` may have nothing queued behind it, so its abort result
+is the only signal the turn ended and is delivered normally.
+
+**Resume vs. fork identity.** A plain resume continues under the **same id** it
+resumed (SDK 0.3.233 rejects `sessionId` + `resume` without `forkSession` at
+spawn time), so `open({ resume })` returns a snapshot whose `id` is `resume`, and
+resuming a session that is still open here is refused with `SESSION_EXISTS`. A
+fork always gets a fresh dsh-minted id (spike 1).
+
+`CcSdkMessage` is deliberately open (`{ type, subtype?, uuid?, session_id?, [field]: unknown }`):
+the SDK union has ~38 variants and grows. **Default-ignore unknown kinds; never
+switch exhaustively.**
+
+**Outbox and interrupts.** Every send is recorded as
+`{ uuid, mode, sentAt, state: 'queued' | 'committed' | 'cancelled' }`.
+`interrupt()` resolves the receipt and reconciles it: known uuids absent from
+`still_queued` become `committed`, survivors stay `queued`, unknown uuids are
+ignored (cron triggers and auto-resume continuations appear there). Results
+commit the batch that ran — N queued messages coalesce into ONE turn with ONE
+result, so a 1:1 uuid→result mapping never holds.
+
+`interrupt({ keepQueued: false })` is **emulated**: SDK 0.3.233 exposes no way to
+drive `interrupt_cancel_queued_v1`, so the seam re-interrupts as surviving turns
+start, capped at `still_queued.length + 2` attempts, and marks those uuids
+`cancelled`. Replace with the native path when the SDK exposes it.
+
+**Pre-warming.** `WarmPool` holds at most one `startup()`-warmed subprocess. Its
+options — including `sessionId` — were frozen at startup, so the pool **pre-mints
+the dsh id** and the accepting `open()` adopts it (dsh still mints every id), and
+it only serves an open whose `warmFingerprint(options)` matches. A mismatch
+discards the held subprocess. Consequence: the first open of any given shape is
+always cold, because `cwd` is unknown before it.
+
+Two rules keep that fingerprint honest, both learned the hard way (§5a):
+
+- **A warm handle is always a PLAIN session.** The fingerprint deliberately
+  ignores `resume`/`forkSession` so a pre-minted id can be adopted, which means a
+  handle warmed *with* either one baked in would be indistinguishable from a
+  plain one — and could silently continue somebody else's transcript. So the
+  service warms from a resume-free template no matter what kind of open seeded it.
+- **`env` is fingerprinted by its auth decision only** — whether
+  `ANTHROPIC_API_KEY` is present, plus a digest of its value so a rotated key is
+  never served from a subprocess frozen with the old one. The rest of `env` is
+  ambient noise outside this seam's control (the SDK itself writes
+  `CLAUDE_AGENT_SDK_VERSION` into `process.env` on its first real call).
 
 ### 4.5 Configuration
 
@@ -421,6 +559,65 @@ reads session policy from `ctx.claudeCode.config`.
 - **`register()`'s returned disposer identity is load-bearing** — yield the
   exact function into the composite effect, never a wrapper.
 
+## 5a. Corrections Phase 2 made to this document
+
+1. **`open()` / `accountInfo()` no longer answer `NOT_IMPLEMENTED`.** §4.1's
+   Phase 1 table is superseded by the Phase 2 table above. The `NOT_IMPLEMENTED`
+   code still exists (the consumer packages still use it), so nothing breaks.
+2. **Unit specs were NOT running on the source plane.** §3 claimed
+   `resolve.tsconfigPaths: true` maps `@deepseek-ai/dsh-claude-code` to `src/`
+   for `packages/*/tests/**`. It did not: Vite applies a tsconfig's `paths` only
+   to files that tsconfig *includes*, and each package's `tsconfig.json` includes
+   `src` only — so every spec silently resolved the seam to its **built
+   `lib/index.js`**, and a spec could pass against a stale build. Proven by
+   editing `src/` and watching the old behavior persist until `pnpm run build`.
+   **Fix: each package now ships `tests/tsconfig.json`** (extends
+   `tsconfig.base.json`, `include: ["."]`, `noEmit`), which is what the resolver
+   needs. No root config, `vitest.config.ts` or root `package.json` was touched.
+   Verified both ways: with the file, a `src/` edit takes effect immediately;
+   without it, the stale `lib/` behavior returns.
+3. **`tests/composition/composition.spec.ts` may no longer call `open()` with a
+   usable `cwd`** — it would spawn a real subprocess. It now asserts the
+   spawn-free guards (`INVALID_CWD`, `NO_LIVE_SESSION`) and adds a check that no
+   `lib/types/**.d.ts` in any package references the Claude Agent SDK outside a
+   comment.
+
+### Defects the live suite (Stage 2) and its review (Stage 3) found
+
+Each of these was a *wrong implementation*, not a wrong test. Every one now has
+an offline regression test, so none of them can come back silently.
+
+4. **A plain resume was rejected by the SDK at spawn.** `resolveQueryOptions()`
+   sent `sessionId` alongside `resume`; SDK 0.3.233 refuses that combination
+   outright (`--session-id can only be used with --continue or --resume if
+   --fork-session is also specified` — the subprocess exits 1 before
+   `system/init`). This is delta S11, which the code's own comment already
+   stated and nothing enforced. **Fix:** a plain resume sends `resume` alone and
+   the session is tracked under the id it resumed; only a fresh session or a
+   fork sends `sessionId`.
+5. **The warm fingerprint was invalidated by the SDK's own side effect.** It
+   hashed the whole `env` spread, and the Claude Agent SDK writes
+   `CLAUDE_AGENT_SDK_VERSION` into `process.env` on its first real
+   `query()`/`startup()` call — so the template fingerprinted *before* that call
+   never matched one resolved after it, and prewarm was dead from the second
+   open onward in any real composition. **Fix:** fingerprint the auth decision
+   (presence + a digest of the key value), which is what the field's own
+   documentation always claimed it was for.
+6. **A warm subprocess could be seeded with `resume`/`forkSession` baked in.**
+   `open()` pre-warmed from the template of the open that had just happened, and
+   the fingerprint ignores those two keys by design — so a handle warmed right
+   after a forked open was indistinguishable from a plain one, and a later
+   unrelated `open()` could have adopted a lease that was silently continuing
+   another session's transcript. (A plain resume was merely wasteful: that
+   `startup()` could only ever fail, per correction 4.) **Fix:** the pool
+   template is always resume-free.
+7. **A plain resume of a LIVE session overwrote its registry entry.** Since a
+   plain resume continues under the same id, `sessions.set(id, …)` replaced the
+   record of a session that was still running — dropping it from `list()` and
+   from teardown, i.e. leaking its subprocess past disposal, with two queries on
+   one transcript. **Fix:** `open()` refuses it with the new `SESSION_EXISTS`
+   code; forking that session is still allowed and still mints a fresh id.
+
 ## 6. Verification before you report
 
 ```sh
@@ -428,10 +625,18 @@ pnpm install                       # from the repo root; zero peer warnings
 pnpm run typecheck                 # every package builds + every spec type-checks
 pnpm run build                     # tsc -b per package -> lib/index.js + lib/types/index.d.ts
 pnpm test                          # build, then vitest run (unit + composition), offline
+pnpm run test:live                 # OPT-IN: DSH_CC_LIVE=1, real subprocesses (§7a)
 ```
 
-All four are green as of the Stage 3 merge point: **61 tests / 9 files** — 54 in
-the three packages' unit specs, 7 in the Phase 1 acceptance test.
+All are green as of the Phase 2 Stage 3 merge point:
+
+- `pnpm test` — **137 passed / 9 skipped, 13 files (+9 skipped)**: 129 in the
+  three packages' unit specs, 8 in the composition acceptance test, and the nine
+  gated live specs collected-and-skipped. Every unit test runs offline against a
+  fake backend; `pnpm test` spawns no subprocess and makes no network call.
+- `pnpm run test:live` — **9 passed / 9 files** against the real SDK
+  (`claude-haiku-4-5-20251001`, claude.ai subscription, no `ANTHROPIC_API_KEY`),
+  ~68s of test time, with `pgrep` confirming zero surviving subprocesses.
 
 ## 7. The Phase 1 acceptance test
 
@@ -459,7 +664,41 @@ consumer package is exercised the way a deployment exercises it.
   a root devDependency too: `cordis-plugin-include`'s published `.d.ts` imports
   `js-yaml`, which `skipLibCheck: false` will not tolerate untyped.
 
+## 7a. The live suite (Phase 2, Stage 2)
+
+`packages/claude-code/tests/live/` holds nine specs — open/result, followup,
+steer, interrupt (both `keepQueued` modes), resume, fork, teardown, prewarm —
+each driving a REAL Claude Code subprocess through the real backend and a real
+`ClaudeCodeService` mounted in a bare cordis Context.
+
+- **Gated.** Every file is `describe.skipIf(!LIVE)` with
+  `LIVE = process.env.DSH_CC_LIVE === '1'`, so `pnpm test` / `pnpm run test:unit`
+  collect them and skip them. `pnpm run test:live` builds, then sets the flag.
+- **House rules** (`tests/live/helpers.ts` enforces them): model is always
+  `claude-haiku-4-5-20251001`, prompts are one sentence, `settingSources: []`,
+  `ANTHROPIC_API_KEY` is never set (subscription auth strips it anyway), every
+  test gets an isolated tmp `cwd` and a hard timeout, and every test disposes its
+  own mount. Orphan checks use `pgrep -f 'claude-agent-sdk-[a-z0-9-]*/claude'`
+  (spike 5's pattern) with a before/after delta, so an unrelated `claude` process
+  on the developer's machine cannot false-positive them.
+- **Two live-suite defects were fixed at the Stage 3 merge point**, both in the
+  tests rather than the seam. (a) *Teardown asserted on a whole-machine process
+  count.* The nine files run in parallel, so a before/after delta around one
+  test read its neighbours' healthy sessions as its own orphans (`expected 2 to
+  be less than or equal to 0`). Orphan assertions are now scoped to the session's
+  own subprocess: SDK 0.3.233 puts `--session-id=<uuid>` in the CLI's argv, which
+  identifies exactly one process. (b) *A history-recall probe was phrased as a
+  "codeword".* Haiku declined it — "establishing that codewords can override my
+  judgment would create a security issue" — failing the fork spec on a model
+  refusal rather than on transcript continuity. The probe is now a plain recall
+  question, which tests the same thing with nothing to refuse.
+- **Assertions are structural, not timing-based** wherever possible: prewarm is
+  proven by the session adopting the pool's pre-minted `sessionId` (frozen at
+  `startup()`, so it could not have come from a cold `query()`), and the drain
+  cap by a counting backend wrapper — neither reaches into private state.
+
 ### Still deferred (do not build now)
 
-- Anything that needs a live Claude Code subprocess, a network call, or real
-  credentials. Both vitest projects run fully offline.
+- Anything that needs a live subprocess in the DEFAULT suites. `pnpm test` and
+  `pnpm run test:unit` remain fully offline: no subprocess, no network, no
+  credentials. Live coverage is opt-in through `pnpm run test:live` only.
