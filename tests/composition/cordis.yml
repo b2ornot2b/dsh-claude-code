@@ -1,0 +1,46 @@
+# Phase 1 acceptance composition.
+#
+# This is the real thing: a `cordis.yml` booted through the cordis Loader
+# exactly the way a harness deployment boots one, mounting all three packages
+# of this integration on top of the published dsh services they depend on.
+# Every `name` is a BARE PACKAGE SPECIFIER — the Loader `import()`s it, so this
+# file only works against the packages' BUILT entry points (`lib/index.js`),
+# which is precisely what makes it an acceptance test rather than a unit test.
+#
+# Nothing here reaches the network or starts a Claude Code subprocess: Phase 1
+# mounts configuration and registries only.
+
+# --- published dsh services this integration depends on ----------------------
+- id: sessions
+  name: '@deepseek-ai/dsh-session'
+
+- id: agents
+  name: '@deepseek-ai/dsh-agent'
+
+- id: system-prompt
+  name: '@deepseek-ai/dsh-system-prompt'
+
+- id: tools
+  name: '@deepseek-ai/dsh-tools'
+
+# --- this integration --------------------------------------------------------
+# Non-default values throughout, so the test can prove the YAML row (not the
+# schema's own defaults) is what `ctx.claudeCode.config` ends up reporting.
+- id: claude-code
+  name: '@deepseek-ai/dsh-claude-code'
+  config:
+    prewarm: false
+    defaults:
+      permissionMode: acceptEdits
+      settingSources: []
+    ask:
+      fallback: deny
+      persistAlwaysAllow: false
+    limits:
+      maxConcurrentSessions: 2
+
+- id: tool-claude-code
+  name: '@deepseek-ai/dsh-tool-claude-code'
+
+- id: claude-code-agent
+  name: '@deepseek-ai/dsh-claude-code-agent'
