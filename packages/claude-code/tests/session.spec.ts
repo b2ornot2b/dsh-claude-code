@@ -519,6 +519,38 @@ describe('CcSession: fan-out', () => {
     expect(healthy).toEqual(['assistant', 'result'])
     expect(logged.some(line => line.includes('listener threw'))).toBe(true)
   })
+
+  it('reports every send to send subscribers (the mirror\'s only view of prompts)', async () => {
+    const { session } = await open()
+    const sends: { uuid: string, mode: string, content: string }[] = []
+    const stop = session.onSend(record => {
+      sends.push({ uuid: record.uuid, mode: record.mode, content: record.content })
+    })
+
+    const first = session.send('do the thing')
+    session.send('and this too', { mode: 'inject' })
+    stop()
+    session.send('unseen')
+
+    expect(sends).toEqual([
+      { uuid: first, mode: 'followup', content: 'do the thing' },
+      { uuid: sends[1]?.uuid ?? '', mode: 'inject', content: 'and this too' },
+    ])
+    // The send record is the outbox's key, so a mirror can correlate it later.
+    expect(session.outbox().map(entry => entry.uuid)).toContain(first)
+  })
+
+  it('isolates a throwing send listener so the send still reaches the SDK', async () => {
+    const logged: string[] = []
+    const { session, query } = await open({}, {}, { logger: { debug: (line: string) => { logged.push(line) } } })
+    session.onSend(() => { throw new Error('mirror exploded') })
+
+    expect(() => session.send('still delivered')).not.toThrow()
+    await settle()
+
+    expect(query.sent.map(message => message.message.content)).toEqual(['still delivered'])
+    expect(logged.some(line => line.includes('send listener threw'))).toBe(true)
+  })
 })
 
 describe('CcSession: close', () => {

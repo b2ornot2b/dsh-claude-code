@@ -16,16 +16,18 @@ Consumers:
 > (`packages/claude-code/claude-code/`) is a mechanical move rather than a rename — we do not
 > own the `@deepseek-ai` npm scope and cannot publish into it.
 
-**Phase status: Phase 2 (session actor).** `open()` is real: it mints the shared dsh/CC id,
+**Phase status: Phase 3 (mirror).** `open()` is real: it mints the shared dsh/CC id,
 resolves the SDK options, spawns (or adopts a pre-warmed) Claude Code subprocess, awaits the
 initialize handshake and registers the session. `send()` / `interrupt()` / `waitForResult()` /
-`onMessage()` live on the `CcSession` actor, reachable through `ctx.claudeCode.session(id)`.
+`onMessage()` / `onSend()` live on the `CcSession` actor, reachable through
+`ctx.claudeCode.session(id)`. A session's traffic can now be projected into a real dsh
+session log — see [Mirroring](#mirroring-into-a-dsh-session-log).
 
-Three things are still stubs, by design and with the phase named in the code: nothing is
-mirrored into the dsh session log until **Phase 3**, `canUseTool` fails CLOSED (every tool
-call is denied with an explanation) until **Phase 4** wires the dsh ask channel, and the
-model-facing `claude_code_*` tools in `@deepseek-ai/dsh-tool-claude-code` are still
-registered-but-inert scaffolds until **Phase 5**.
+Two things are still stubs, by design and with the phase named in the code: `canUseTool`
+fails CLOSED (every tool call is denied with an explanation) until **Phase 4** wires the dsh
+ask channel, and the model-facing `claude_code_*` tools in
+`@deepseek-ai/dsh-tool-claude-code` are still registered-but-inert scaffolds until
+**Phase 5**.
 
 ### Running the tests
 
@@ -39,10 +41,16 @@ Loader, which imports each row's **built** `lib/index.js` — that is what prove
 `exports` map, the `inject` list, the `Config` schema and the SDK-free `lib/types` for real,
 rather than against TypeScript sources.
 
-The live suite (`tests/live/`) drives nine real sessions on
+The live suite (`tests/live/`) drives twelve real specs on
 `claude-haiku-4-5-20251001` with one-sentence prompts and isolated tmp working
 directories, and asserts on a `pgrep` delta that no subprocess outlives a test. It is
-gated with `describe.skipIf` so the default suites stay offline-green.
+gated with `describe.skipIf` so the default suites stay offline-green. Two of those specs
+serve the mirror: `record-fixtures.live.spec.ts` re-records the scrubbed transcripts under
+`tests/fixtures/` (replayed offline by `mirror-golden.spec.ts`), and
+`mirror-e2e.live.spec.ts` runs a live tool call through a real `SessionStore` session and
+round-trips the resulting log through `Session.fromRestore`. A third,
+`mirror-cancel.live.spec.ts`, covers the two turns that never get a normal result: one
+interrupted mid-block, and one whose session is closed outright while it runs.
 
 ---
 
@@ -57,7 +65,7 @@ assumes it can will be silently wrong the first time CC auto-compacts.
 
 ## Service API (`ctx.claudeCode`)
 
-| Member | Phase 2 behavior |
+| Member | Phase 3 behavior |
 |---|---|
 | `open(options)` | opens (or resumes, or forks) a live session and returns its snapshot. Refuses a non-absolute or missing `cwd` with `INVALID_CWD` **before** anything spawns, and a session past `limits.maxConcurrentSessions` with `SESSION_LIMIT` |
 | `get(id)` | the live snapshot of a registered session (status, model, pending asks), `undefined` when unknown |
@@ -65,10 +73,59 @@ assumes it can will be silently wrong the first time CC auto-compacts.
 | `close(id)` | settles pending asks, aborts, closes the SDK query, ends the input stream, drops the registry entry |
 | `session(id)` | the `CcSession` actor — `send` / `interrupt` / `waitForResult` / `onMessage`. Values (snapshots) cross tool boundaries; this handle does not |
 | `accountInfo()` | the account from the first live session's cached initialize response. Throws `NO_LIVE_SESSION` when nothing is open: it never spawns a subprocess of its own |
+| `attachMirror(id, session, opts?)` | mirrors a live session into a dsh session log (see below). Throws `UNKNOWN_SESSION` for an unregistered id; when the session closes the mirror is finalized (a turn left open by a mid-turn death is closed as `aborted`/`disposed`) and then detached |
 | `config` | the schemastery-validated configuration |
 
 All session lifecycle is registered through `ctx.effect()`, so disposing the plugin fiber
 (HMR, plugin unload, process teardown) closes every session this service opened.
+
+## Mirroring into a dsh session log
+
+```ts
+// Whenever `open()` carries a prompt, attach at open time: the prompt is sent
+// synchronously inside open(), and a later attachment misses the turn it starts.
+const snapshot = await ctx.claudeCode.open({ cwd, prompt, mirror: { session: dshSession } })
+
+// A session opened idle (or a second log) can attach afterwards:
+const { mirror, dispose } = ctx.claudeCode.attachMirror(snapshot.id, dshSession)
+mirror.callIdFor('toolu_abc')   // the cc tool_use id -> dsh CallId table
+```
+
+The mirror is **write-only into dsh**. Its entire view of a Claude Code session is two
+subscribe functions (`onMessage`, `onSend`), so it cannot send, interrupt, close, or register
+a cordis waterfall listener — that is enforced by the type, not by a promise.
+
+Turn framing follows what Claude Code actually does with a message, not just its mode: a
+`followup` sent while a turn is running is QUEUED by CC and runs as its own later turn, so its
+`user/message` is **deferred** to that turn's `turn/start` — recording it immediately would
+put the prompt before the answer to the previous one. A `steer` is recorded in the open turn,
+because the refold merges both instructions into it. An `inject` starts no turn at all.
+
+When the Claude Code session closes, the service calls `mirror.finalize()` before detaching:
+a session that dies mid-turn never emits the result that would have closed the dsh turn, and
+a log with a dangling `turn/start` can never be appended to again. `finalize()` closes it as
+`{ kind: 'aborted', reason: { kind: 'disposed' } }` and appends nothing when no turn is open.
+
+What it writes: `turn/start` + `user/message` on a send; one dsh **step per model call**
+(`step/start` … `assistant/chunk`* … `assistant/message` … `tool/call`* … `tool/result`* …
+`step/end`); `turn/end` on the SDK result. Assistant content is accumulated from
+`stream_event` partials — `SDKAssistantMessage` is a per-block *checkpoint* (spike 6) and is
+used only as a checksum. Thinking becomes `block-start { blockType: 'reasoning' }` +
+`reasoning-delta`. A steer's abort result is suppressed entirely (the turn refolds) along with
+the partial model call it aborted, because the refold re-streams from a fresh `message_start`;
+an `interrupt()`'s closes the turn as `aborted`, never as an error, and the killed call still
+contributes the text and reasoning it had already streamed (a `tool_use` block whose arguments
+were cut off does not — the JSON is truncated and no such call ran). A model call that
+produced nothing at all gets no `assistant/message` rather than an empty one. Unknown SDK
+message kinds — the union has ~38 variants and grows — are counted in `mirror.stats.ignored`
+and dropped.
+
+Not written: `request/header` (CC never discloses the request config it used, and a wrong
+header poisons `foldRequestHeader()` downstream) and the text of user-role SDK messages
+(prompts are recorded from the send side; an echo would duplicate them).
+
+`@deepseek-ai/dsh-session` stays optional for pure-SDK consumers: it is a peer dependency used
+for types, and a composition that never passes a dsh session never constructs one.
 
 ## Configuration
 
@@ -194,9 +251,21 @@ substitutes (`inject()` → `shouldQuery: false` sends, `query.setModel()`,
 
 ## Model Experience
 
-None, as this package registers no tool schema, no system-prompt contribution, and no
-model-visible event; the model-facing surface belongs to `@deepseek-ai/dsh-tool-claude-code`
-(delegation tools) and to the mirrored session log rendered by the harness UI.
+None **for the dsh model**, as this package registers no tool schema, no system-prompt
+contribution, and no model-visible event. The model-facing surface belongs to
+`@deepseek-ai/dsh-tool-claude-code` (delegation tools, still inert until Phase 5).
+
+What Phase 3 adds is **human**-facing, not model-facing: the mirror projects a Claude Code
+session into a dsh session log, so the harness UI renders a CC session with the same
+turn/step/chunk vocabulary as a native one — streaming text and reasoning, tool calls with
+their results, todo snapshots, and a turn that ends `completed` / `aborted` / `error`. The
+`claude-code/compact` event marks where CC compacted its own transcript.
+
+Two things a reader of that log must not assume. It is **not** the model's context (§5.1):
+Claude Code owns and compacts its own history, so `deriveMessages()` reconstructs what dsh
+observed, never what CC will send. And permission prompts are still invisible in it: the
+`approval/asked` + `approval/decided` pair arrives with the ask channel in **Phase 4**, so
+today's log shows a tool call that was silently denied by the fail-closed stub.
 
 #### KV Cache effect
 
@@ -210,9 +279,30 @@ over its own transcript, which the dsh mirror neither feeds nor invalidates.
   stub that answers `deny` with an explanation naming the phase. A live session can read
   nothing and write nothing until the dsh ask channel is wired; that is deliberate (a
   silently-allowing default is the one failure mode that cannot be undone).
-- **Nothing is mirrored into the dsh session log yet (Phase 3)** — `onMessage()` is the
-  attachment point and every envelope already carries the metadata the mirror needs
-  (`interruptArtifact`, `reinit`), but no `SessionEvent` is appended anywhere.
+- **A `claude-code/compact` event cannot be marked `ignorable` (dsh rc.7)** — a custom
+  session event must carry `ignorable: true` on its ENVELOPE, or a persistence read path
+  whose build does not know the type refuses the whole log. `Session.append()` builds and
+  deep-freezes the envelope itself and offers no channel for the marker, so a log holding a
+  live-appended compaction boundary is refused by a stock harness build. Two mitigations
+  ship: `mirror: { compaction: 'skip' }` omits the event, and `markEventIgnorable(event)`
+  stamps the marker at the seed/restore boundary, where envelopes ARE caller-supplied.
+  Adopt `append(type, data, { ignorable: true })` when upstream exposes it.
+- **The mirror's turn framing is an approximation, and it is one-directional** — CC's turn is
+  coarser than dsh's step loop, so one CC turn becomes one dsh turn with one step per model
+  call. Consequences a reader should know: a `tool_result` that arrives after its step closed
+  is dropped (`stats.ignored['tool-result:orphan']`) because dsh's invariants reject it
+  anywhere else; a turn CC starts on its own (auto-resume, a scheduled trigger) is opened
+  defensively so nothing lands outside a turn; and a `followup` queued behind a running turn
+  is recorded in the turn that RUNS it, which means the log's ordering follows CC's execution
+  order rather than the wall-clock order of the sends.
+- **A re-attached mirror does not inherit the previous one's pending tool calls** — the
+  constructor folds turn/step numbering out of an existing log, but not its
+  `tool_use → CallId` table, so a `tool_result` whose `tool/call` was written by an earlier
+  mirror instance is dropped as an orphan. Attach once per session.
+- **The mirror carries `parent_tool_use_id` only on `tool/result`** — dsh's `assistant/chunk`
+  payload is the closed `StreamChunk` union and `tool/call` has no free field, so with
+  `forwardSubagentText: true` a subagent's text and calls appear inline in the parent's step.
+  Only `tool/result` can name its parent (in the event's tool-private `meta`).
 - **`accountInfo()` needs a live session** — the account arrives with a session's initialize
   handshake, and this call deliberately never opens one; with an empty registry it throws
   `NO_LIVE_SESSION`.

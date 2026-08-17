@@ -30,6 +30,7 @@ import type {
   CcBackendQuery, CcMessageEnvelope, CcSdkMessage, CcSdkUserMessage, CcSession, ClaudeCodeConfig,
   ClaudeCodeServiceDeps, QueryBackend,
 } from '@deepseek-ai/dsh-claude-code'
+import { SessionStore } from '@deepseek-ai/dsh-session'
 
 const execFileP = promisify(execFile)
 
@@ -114,6 +115,52 @@ export async function mountLive(
 
 /** Dispose a live mount all the way down: closes every session, kills every subprocess it owned. */
 export async function disposeLive(mounted: LiveMount): Promise<void> {
+  await mounted.fiber.dispose()
+  await mounted.ctx.fiber.dispose()
+}
+
+/** One mounted live service ALONGSIDE a real `SessionStore`, in one cordis Context. */
+export interface LiveMountWithStore extends LiveMount {
+  readonly store: SessionStore
+  readonly storeFiber: Awaited<ReturnType<Context['plugin']>>
+}
+
+/**
+ * Mount a REAL `ClaudeCodeService` and a REAL `SessionStore` side by side —
+ * the composition the mirror's live end-to-end suite needs: a genuine dsh
+ * `Session` (not a recording double) to attach `attachMirror`/`open({ mirror })`
+ * to, in the exact real-composition pattern `tests/composition/` uses (a real
+ * cordis `Context`, real service classes — just hand-mounted here instead of
+ * booted through a `cordis.yml` + Loader, since this suite also needs to swap
+ * in a hardcoded `canUseTool`).
+ * @param config - surface config overrides, exactly as {@link mountLive}.
+ * @param deps - injectable seams, exactly as {@link mountLive}.
+ * @returns the mounted context, both fibers, the service and the store.
+ */
+export async function mountLiveWithStore(
+  config: ClaudeCodeConfig = {},
+  deps: ClaudeCodeServiceDeps = {},
+): Promise<LiveMountWithStore> {
+  const ctx = new Context()
+  let service: ClaudeCodeService | undefined
+  function claudeCodeLiveMountWithStore(inner: Context): void {
+    service = new ClaudeCodeService(
+      inner,
+      { ...config, defaults: { ...config.defaults, settingSources: config.defaults?.settingSources ?? [], model: LIVE_MODEL } },
+      deps)
+  }
+  const fiber = await ctx.plugin(claudeCodeLiveMountWithStore)
+  const storeFiber = await ctx.plugin(SessionStore)
+  const store = ctx.get('sessions')
+  if (service === undefined || store === undefined) {
+    throw new Error('mountLiveWithStore: mount did not construct the service or the store')
+  }
+  return { ctx, fiber, service, store, storeFiber }
+}
+
+/** Dispose a {@link mountLiveWithStore} mount all the way down, store included. */
+export async function disposeLiveWithStore(mounted: LiveMountWithStore): Promise<void> {
+  await mounted.storeFiber.dispose()
   await mounted.fiber.dispose()
   await mounted.ctx.fiber.dispose()
 }

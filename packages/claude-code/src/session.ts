@@ -136,6 +136,33 @@ export interface CcMessageEnvelope {
  */
 export type CcMessageListener = (envelope: CcMessageEnvelope) => void
 
+/**
+ * One message this session SENT.
+ *
+ * Outgoing messages never come back over {@link CcSession.onMessage} — the CLI
+ * does not echo the prompt it was given — so a mirror that must record
+ * `user/message` framing (§5.2) has to observe the send side. This is that
+ * seam, and it is deliberately the ONLY thing a mirror learns about sends.
+ */
+export interface CcSendRecord {
+  /** The session that sent it. */
+  readonly sessionId: CcSessionId
+  /** The uuid the message was stamped with — the outbox and receipt key. */
+  readonly uuid: CcUuid
+  /** Which inbox verb this was. */
+  readonly mode: CcSendMode
+  /** The message text, exactly as handed to the SDK. */
+  readonly content: string
+  /** `Date.now()` at send time. */
+  readonly sentAt: number
+}
+
+/**
+ * A send subscriber.
+ * @param send - what was sent.
+ */
+export type CcSendListener = (send: CcSendRecord) => void
+
 /** Identity and per-session shape of one `CcSession`. */
 export interface CcSessionOptions {
   /** The shared dsh/CC id. A bare UUID, minted by the service (or pre-minted by the warm pool). */
@@ -248,6 +275,7 @@ export class CcSession {
   readonly #input: CcInputStream = createInputStream()
   readonly #abort: AbortController
   readonly #listeners = new Set<CcMessageListener>()
+  readonly #sendListeners = new Set<CcSendListener>()
   readonly #outbox = new Map<string, CcOutboxEntry>()
   readonly #resultWaiters = new Set<ResultWaiter>()
   /** Resolvers woken by the pump on every turn boundary (used by the drain loop). */
@@ -367,6 +395,24 @@ export class CcSession {
   }
 
   /**
+   * Subscribe to every message this session SENDS.
+   *
+   * The Phase 3 mirror needs it because outgoing messages never come back over
+   * {@link CcSession.onMessage}: the CLI does not echo the prompt it was given,
+   * so the send side is the only place `turn/start` + `user/message` framing can
+   * come from (§5.2). Listener failures are isolated exactly as in `onMessage`.
+   *
+   * @param listener - called for each send, synchronously, in send order.
+   * @returns an unsubscribe function; calling it twice is harmless.
+   */
+  onSend(listener: CcSendListener): () => void {
+    this.#sendListeners.add(listener)
+    return () => {
+      this.#sendListeners.delete(listener)
+    }
+  }
+
+  /**
    * Run `listener` once, when this session finishes closing (for any reason,
    * including a teardown-driven close). The service uses it to drop the registry
    * entry so a closed session never lingers in `list()`.
@@ -462,7 +508,11 @@ export class CcSession {
       ...(mode === 'inject' ? { shouldQuery: false } : {}),
     })
 
-    this.#outbox.set(uuid, { uuid, mode, sentAt: Date.now(), state: mode === 'inject' ? 'committed' : 'queued' })
+    const sentAt = Date.now()
+    this.#outbox.set(uuid, { uuid, mode, sentAt, state: mode === 'inject' ? 'committed' : 'queued' })
+    // Fanned out BEFORE the status machine moves: a subscriber only ever learns
+    // that a message left, never how the session interpreted it.
+    this.emitSend({ sessionId: this.id, uuid, mode, content: init.content, sentAt })
 
     if (mode === 'inject') {
       // No turn is started, so the status machine is untouched: an inject on an
@@ -609,6 +659,7 @@ export class CcSession {
     for (const wake of [...this.#turnBoundaryWaiters]) wake()
     this.#turnBoundaryWaiters.clear()
     this.#listeners.clear()
+    this.#sendListeners.clear()
     for (const listener of [...this.#closeListeners]) {
       try {
         listener()
@@ -925,6 +976,23 @@ export class CcSession {
       } catch (error) {
         this.#deps.logger?.debug(
           `claude-code: session ${this.id} message listener threw: ${describe(error)}`)
+      }
+    }
+  }
+
+  /**
+   * Fan one send out to every send subscriber, isolating listener failures: a
+   * mirror that throws must never fail the send that reached the subprocess.
+   * @param send - what was sent.
+   * @returns nothing.
+   */
+  private emitSend(send: CcSendRecord): void {
+    for (const listener of [...this.#sendListeners]) {
+      try {
+        listener(send)
+      } catch (error) {
+        this.#deps.logger?.debug(
+          `claude-code: session ${this.id} send listener threw: ${describe(error)}`)
       }
     }
   }

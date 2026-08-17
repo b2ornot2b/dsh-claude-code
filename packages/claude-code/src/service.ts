@@ -15,10 +15,14 @@ import { Service } from '@deepseek-ai/cordis'
 import type { Context } from '@deepseek-ai/cordis'
 import type z from '@deepseek-ai/schemastery'
 
+import type { Session as DshSession } from '@deepseek-ai/dsh-session'
+
 import { realBackend } from './backend.ts'
 import type { CcCanUseTool, QueryBackend } from './backend.ts'
 import { Config as ConfigSchema, resolveClaudeCodeConfig } from './config.ts'
 import type { ClaudeCodeConfig, ResolvedClaudeCodeConfig } from './config.ts'
+import { attachMirror } from './mirror.ts'
+import type { CcMirrorHandle, CcMirrorOptions } from './mirror.ts'
 import { WarmPool } from './prewarm.ts'
 import { CcSession, resolveQueryOptions } from './session.ts'
 import type { CcSessionDeps } from './session.ts'
@@ -35,12 +39,11 @@ declare module '@deepseek-ai/cordis' {
   }
 
   /**
-   * Placeholder for the seam's event vocabulary. Phase 3 (the mirror) declares
-   * the `claude-code/*` events here — and every one of them must also be
-   * declaration-merged into `SessionEventMap` and marked `ignorable`, or an
-   * older runtime refuses the log. Nothing is dispatched yet, so nothing is
-   * declared yet: an event declared before it is emitted invites listeners
-   * that can never fire.
+   * Still empty, deliberately. Phase 3 landed the mirror WITHOUT a cordis
+   * event: the mirror writes into a dsh session log (whose own vocabulary it
+   * extends — see `SessionEventMap['claude-code/compact']` in `mirror.ts`) and
+   * dispatches nothing on the context. An event declared before it is emitted
+   * only invites listeners that can never fire.
    */
   interface Events {}
 }
@@ -230,6 +233,13 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
       throw error
     }
 
+    // BEFORE the prompt: `send()` is synchronous, so a mirror attached after it
+    // would miss the `turn/start` + `user/message` that opening prompt frames.
+    if (options.mirror !== undefined) {
+      const { session: dshSession, ...mirrorOptions } = options.mirror
+      this.mirror(session, dshSession, mirrorOptions)
+    }
+
     if (options.prompt !== undefined) session.send(options.prompt, { mode: 'followup' })
 
     // Prepare the NEXT session while this one runs, always as a PLAIN session of
@@ -321,6 +331,49 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
    */
   session(id: CcSessionId): CcSession | undefined {
     return this.sessions.get(id)?.session
+  }
+
+  /**
+   * Mirror an already-open session into a dsh session log (§5).
+   *
+   * @param id - the shared dsh/CC session id.
+   * @param session - the dsh session to append to.
+   * @param options - subagent policy, compaction policy, provider name, logger.
+   * @returns the mirror and its unsubscribe function.
+   * @throws {ClaudeCodeError} code `UNKNOWN_SESSION` when the id is not registered here.
+   */
+  attachMirror(id: CcSessionId, session: DshSession, options: CcMirrorOptions = {}): CcMirrorHandle {
+    const actor = this.sessions.get(id)?.session
+    if (actor === undefined) {
+      throw new ClaudeCodeError(
+        `claude-code: no session ${id} is registered in this context`, 'UNKNOWN_SESSION')
+    }
+    return this.mirror(actor, session, options)
+  }
+
+  /**
+   * Attach one mirror and bind its lifetime to the Claude Code session's.
+   *
+   * The mirror is handed the ACTOR, which it only ever reads through
+   * `onMessage`/`onSend` — it is write-only into dsh and drives nothing.
+   *
+   * @param actor - the live Claude Code session.
+   * @param session - the dsh session to append to.
+   * @param options - mirror options (the logger defaults to this service's).
+   * @returns the mirror handle.
+   */
+  private mirror(actor: CcSession, session: DshSession, options: CcMirrorOptions): CcMirrorHandle {
+    const handle = attachMirror(actor, session, { logger: this.log, ...options })
+    // A mirror outliving its session would hold a listener on a dead actor and
+    // keep appending nothing forever; disposal is owned here, not by the caller.
+    // `finalize()` first: a session closed MID-TURN never emits the result that
+    // would have closed the dsh turn, and a log with a dangling `turn/start`
+    // can never be appended to again (dsh refuses a second open turn).
+    actor.onClose(() => {
+      handle.mirror.finalize()
+      handle.dispose()
+    })
+    return handle
   }
 
   /**

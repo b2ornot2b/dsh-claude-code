@@ -1,0 +1,1488 @@
+{
+  "scenario": "tool-call",
+  "description": "One Bash tool_use + tool_result pair, in an isolated cwd, under a hardcoded canUseTool allow.",
+  "model": "claude-haiku-4-5-20251001",
+  "entries": [
+    {
+      "kind": "send",
+      "send": {
+        "uuid": "uuid-scrubbed-0001",
+        "mode": "followup",
+        "content": "Use the Bash tool to run `echo fixture-hello` and then tell me exactly what it printed, in one short sentence.",
+        "sentAt": 0
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "command_lifecycle",
+          "command_uuid": "uuid-scrubbed-0001",
+          "state": "queued",
+          "uuid": "uuid-scrubbed-0002",
+          "session_id": "uuid-scrubbed-0003"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "command_lifecycle",
+          "command_uuid": "uuid-scrubbed-0001",
+          "state": "started",
+          "uuid": "uuid-scrubbed-0004",
+          "session_id": "uuid-scrubbed-0003"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "system",
+          "subtype": "init",
+          "cwd": "/scrubbed/cwd",
+          "session_id": "uuid-scrubbed-0003",
+          "tools": [
+            "Task",
+            "AskUserQuestion",
+            "Bash",
+            "CronCreate",
+            "CronDelete",
+            "CronList",
+            "DesignSync",
+            "Edit",
+            "EnterPlanMode",
+            "EnterWorktree",
+            "ExitPlanMode",
+            "ExitWorktree",
+            "ListAgents",
+            "Monitor",
+            "NotebookEdit",
+            "PushNotification",
+            "Read",
+            "RemoteTrigger",
+            "ReportFindings",
+            "ScheduleWakeup",
+            "SendMessage",
+            "Skill",
+            "TaskCreate",
+            "TaskGet",
+            "TaskList",
+            "TaskOutput",
+            "TaskStop",
+            "TaskUpdate",
+            "ToolSearch",
+            "WebFetch",
+            "WebSearch",
+            "Workflow",
+            "Write"
+          ],
+          "mcp_servers": [],
+          "model": "claude-haiku-4-5-20251001",
+          "permissionMode": "default",
+          "slash_commands": [
+            "deep-research",
+            "design-sync",
+            "dataviz",
+            "update-config",
+            "verify",
+            "debug",
+            "code-review",
+            "simplify",
+            "batch",
+            "fewer-permission-prompts",
+            "doctor",
+            "loop",
+            "schedule",
+            "claude-api",
+            "run",
+            "run-skill-generator",
+            "agents",
+            "auto-mode-setup",
+            "autocompact",
+            "clear",
+            "color",
+            "compact",
+            "config",
+            "context",
+            "effort",
+            "fast",
+            "heapdump",
+            "init",
+            "mcp",
+            "import",
+            "model",
+            "__remote-workflow",
+            "workflow-launch-exec",
+            "reload-skills",
+            "rename",
+            "ultrareview",
+            "security-review",
+            "usage-credits",
+            "extra-usage",
+            "usage",
+            "insights",
+            "recap",
+            "goal",
+            "design",
+            "design-consent",
+            "design-revoke",
+            "list-agents",
+            "team-onboarding"
+          ],
+          "terminal_slash_commands": [
+            "doctor",
+            "color"
+          ],
+          "apiKeySource": "none",
+          "claude_code_version": "2.1.233",
+          "output_style": "default",
+          "agents": [
+            "claude",
+            "Explore",
+            "general-purpose",
+            "Plan",
+            "statusline-setup"
+          ],
+          "skills": [
+            "deep-research",
+            "design-sync",
+            "dataviz",
+            "update-config",
+            "verify",
+            "debug",
+            "code-review",
+            "simplify",
+            "batch",
+            "fewer-permission-prompts",
+            "doctor",
+            "loop",
+            "schedule",
+            "claude-api",
+            "run",
+            "run-skill-generator"
+          ],
+          "plugins": [],
+          "capabilities": [
+            "interrupt_receipt_v1",
+            "interrupt_cancel_queued_v1",
+            "msg-scrubbed-0001"
+          ],
+          "analytics_disabled": false,
+          "product_feedback_disabled": false,
+          "uuid": "uuid-scrubbed-0005",
+          "memory_paths": {
+            "auto": "/scrubbed/home/.claude/projects/scrubbed-project-slug/memory/"
+          },
+          "messaging_socket_path": "/tmp/cc-socks/67297.sock",
+          "fast_mode_state": "off",
+          "fast_mode_disabled_reason": "sdk_opt_in_required"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "system",
+          "subtype": "status",
+          "status": "requesting",
+          "uuid": "uuid-scrubbed-0006",
+          "session_id": "uuid-scrubbed-0003"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "rate_limit_event",
+          "rate_limit_info": {
+            "status": "allowed",
+            "resetsAt": 0,
+            "rateLimitType": "five_hour",
+            "overageStatus": "rejected",
+            "overageDisabledReason": "out_of_credits",
+            "isUsingOverage": false
+          },
+          "uuid": "uuid-scrubbed-0007",
+          "session_id": "uuid-scrubbed-0003"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "message_start",
+            "message": {
+              "model": "claude-haiku-4-5-20251001",
+              "id": "msg-scrubbed-0002",
+              "type": "message",
+              "role": "assistant",
+              "content": [],
+              "stop_reason": null,
+              "stop_sequence": null,
+              "stop_details": null,
+              "usage": {
+                "input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "cache_creation": {
+                  "ephemeral_5m_input_tokens": 0,
+                  "ephemeral_1h_input_tokens": 0
+                },
+                "output_tokens": 0,
+                "service_tier": "standard",
+                "inference_geo": "not_available"
+              },
+              "diagnostics": null
+            }
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0008",
+          "ttft_ms": 0
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+              "type": "thinking",
+              "thinking": "",
+              "signature": ""
+            }
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0009"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "system",
+          "subtype": "thinking_tokens",
+          "estimated_tokens": 4,
+          "estimated_tokens_delta": 4,
+          "uuid": "uuid-scrubbed-0010",
+          "session_id": "uuid-scrubbed-0003"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+              "type": "thinking_delta",
+              "thinking": "The user wants",
+              "estimated_tokens": null
+            }
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0011"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "system",
+          "subtype": "thinking_tokens",
+          "estimated_tokens": 7,
+          "estimated_tokens_delta": 3,
+          "uuid": "uuid-scrubbed-0012",
+          "session_id": "uuid-scrubbed-0003"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+              "type": "thinking_delta",
+              "thinking": " me to run `",
+              "estimated_tokens": null
+            }
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0013"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "system",
+          "subtype": "thinking_tokens",
+          "estimated_tokens": 45,
+          "estimated_tokens_delta": 38,
+          "uuid": "uuid-scrubbed-0014",
+          "session_id": "uuid-scrubbed-0003"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+              "type": "thinking_delta",
+              "thinking": "echo fixture-hello` using the Bash tool and then tell them exactly what it printed in one short sentence.\n\nLet me call the Bash tool with that command.",
+              "estimated_tokens": null
+            }
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0015"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+              "type": "thinking_delta",
+              "thinking": "",
+              "estimated_tokens": null
+            }
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0016"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "system",
+          "subtype": "thinking_tokens",
+          "estimated_tokens": 108,
+          "estimated_tokens_delta": 63,
+          "uuid": "uuid-scrubbed-0017",
+          "session_id": "uuid-scrubbed-0003"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+              "type": "signature_delta",
+              "signature": "EqgDCpMBCBAYAipA4KE07K69k9XOGAgZpa4+46ucztbjZsd4/SkRJdY18WgqLQyMgbQnAi+8ocuQfQL7Fq2DA9vGuhYzeMoEg04IqDIZY2xhdWRlLWhhaWt1LTQtNS0yMDI1MTAwMTgAQgh0aGlua2luZ1okYzM0MWE5YTYtOWY3Yi00OTEyLWIyNDEtYjExODhiNjBhMWRlEgzgM1OznlAIp+c6LiAaDI+ABUThDnQ6Y6Hi+CIwsHsVrQolJvt5+tEmyK7054M6kVbb1jaYN9glxgACPCjgBAOpkQO63/E6AscQBqBpKsEBd4eBhlwlSNmi7z/zRBI4HSR3ON56C0153kYbVI1ODy6xhMocraUdPlkDmxokLM5tYV9eOIiP2hTMD5ppjrHvVZoqcSr2KqIlYfgrjaZCdIXBYQoMcG9qOfTNqnv9ttFXKhzx+Zmi1IUR8qKFpZ+RTiSKV2+PgUc1JpeZ3flRnw/LbYrMIWbIF+RLJdpPnGX/dL8FUialY+p77tEWT83Qx6g8x+1nh9pMB+sXlBZxKJ/9+THjLXyTbEJQ9VHRv5tsxxgB"
+            }
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0018"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "assistant",
+          "message": {
+            "model": "claude-haiku-4-5-20251001",
+            "id": "msg-scrubbed-0002",
+            "type": "message",
+            "role": "assistant",
+            "content": [
+              {
+                "type": "thinking",
+                "thinking": "The user wants me to run `echo fixture-hello` using the Bash tool and then tell them exactly what it printed in one short sentence.\n\nLet me call the Bash tool with that command.",
+                "signature": "EqgDCpMBCBAYAipA4KE07K69k9XOGAgZpa4+46ucztbjZsd4/SkRJdY18WgqLQyMgbQnAi+8ocuQfQL7Fq2DA9vGuhYzeMoEg04IqDIZY2xhdWRlLWhhaWt1LTQtNS0yMDI1MTAwMTgAQgh0aGlua2luZ1okYzM0MWE5YTYtOWY3Yi00OTEyLWIyNDEtYjExODhiNjBhMWRlEgzgM1OznlAIp+c6LiAaDI+ABUThDnQ6Y6Hi+CIwsHsVrQolJvt5+tEmyK7054M6kVbb1jaYN9glxgACPCjgBAOpkQO63/E6AscQBqBpKsEBd4eBhlwlSNmi7z/zRBI4HSR3ON56C0153kYbVI1ODy6xhMocraUdPlkDmxokLM5tYV9eOIiP2hTMD5ppjrHvVZoqcSr2KqIlYfgrjaZCdIXBYQoMcG9qOfTNqnv9ttFXKhzx+Zmi1IUR8qKFpZ+RTiSKV2+PgUc1JpeZ3flRnw/LbYrMIWbIF+RLJdpPnGX/dL8FUialY+p77tEWT83Qx6g8x+1nh9pMB+sXlBZxKJ/9+THjLXyTbEJQ9VHRv5tsxxgB"
+              }
+            ],
+            "stop_reason": null,
+            "stop_sequence": null,
+            "stop_details": null,
+            "usage": {
+              "input_tokens": 0,
+              "cache_creation_input_tokens": 0,
+              "cache_read_input_tokens": 0,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 0
+              },
+              "output_tokens": 0,
+              "service_tier": "standard",
+              "inference_geo": "not_available"
+            },
+            "diagnostics": null,
+            "context_management": null
+          },
+          "parent_tool_use_id": null,
+          "session_id": "uuid-scrubbed-0003",
+          "uuid": "uuid-scrubbed-0019",
+          "timestamp": "2026-08-17T20:36:38.009Z",
+          "request_id": "req_011Ce8xnDY9hU8bfsqoJdYCq"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_stop",
+            "index": 0
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0020"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {
+              "type": "tool_use",
+              "id": "tool-scrubbed-0001",
+              "name": "Bash",
+              "input": {},
+              "caller": {
+                "type": "direct"
+              }
+            }
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0021"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": {
+              "type": "input_json_delta",
+              "partial_json": ""
+            }
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0022"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": {
+              "type": "input_json_delta",
+              "partial_json": "{\"command\": \"echo fixture-hello"
+            }
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0023"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": {
+              "type": "input_json_delta",
+              "partial_json": "\", \"description\": \"Print fixture-hello to verify tool output"
+            }
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0024"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": {
+              "type": "input_json_delta",
+              "partial_json": "\"}"
+            }
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0025"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "assistant",
+          "message": {
+            "model": "claude-haiku-4-5-20251001",
+            "id": "msg-scrubbed-0002",
+            "type": "message",
+            "role": "assistant",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "tool-scrubbed-0001",
+                "name": "Bash",
+                "input": {
+                  "command": "echo fixture-hello",
+                  "description": "Print fixture-hello to verify tool output"
+                },
+                "caller": {
+                  "type": "direct"
+                }
+              }
+            ],
+            "stop_reason": null,
+            "stop_sequence": null,
+            "stop_details": null,
+            "usage": {
+              "input_tokens": 0,
+              "cache_creation_input_tokens": 0,
+              "cache_read_input_tokens": 0,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 0
+              },
+              "output_tokens": 0,
+              "service_tier": "standard",
+              "inference_geo": "not_available"
+            },
+            "diagnostics": null,
+            "context_management": null
+          },
+          "parent_tool_use_id": null,
+          "session_id": "uuid-scrubbed-0003",
+          "uuid": "uuid-scrubbed-0026",
+          "timestamp": "2026-08-17T20:36:38.067Z",
+          "request_id": "req_011Ce8xnDY9hU8bfsqoJdYCq"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_stop",
+            "index": 1
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0027"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "message_delta",
+            "delta": {
+              "stop_reason": "tool_use",
+              "stop_sequence": null,
+              "stop_details": null
+            },
+            "usage": {
+              "input_tokens": 0,
+              "cache_creation_input_tokens": 0,
+              "cache_read_input_tokens": 0,
+              "output_tokens": 0,
+              "output_tokens_details": {
+                "thinking_tokens": 0
+              },
+              "iterations": [
+                {
+                  "input_tokens": 0,
+                  "output_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "cache_creation_input_tokens": 0,
+                  "cache_creation": {
+                    "ephemeral_5m_input_tokens": 0,
+                    "ephemeral_1h_input_tokens": 0
+                  },
+                  "type": "message"
+                }
+              ]
+            },
+            "context_management": {
+              "applied_edits": []
+            }
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0028"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "message_stop"
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0029"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "user",
+          "message": {
+            "role": "user",
+            "content": [
+              {
+                "tool_use_id": "tool-scrubbed-0001",
+                "type": "tool_result",
+                "content": "fixture-hello",
+                "is_error": false
+              }
+            ]
+          },
+          "parent_tool_use_id": null,
+          "session_id": "uuid-scrubbed-0003",
+          "uuid": "uuid-scrubbed-0030",
+          "timestamp": "2026-08-17T20:36:38.675Z",
+          "tool_use_result": {
+            "stdout": "fixture-hello",
+            "stderr": "",
+            "interrupted": false,
+            "isImage": false,
+            "noOutputExpected": false
+          }
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "system",
+          "subtype": "status",
+          "status": "requesting",
+          "uuid": "uuid-scrubbed-0031",
+          "session_id": "uuid-scrubbed-0003"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "message_start",
+            "message": {
+              "model": "claude-haiku-4-5-20251001",
+              "id": "msg-scrubbed-0003",
+              "type": "message",
+              "role": "assistant",
+              "content": [],
+              "stop_reason": null,
+              "stop_sequence": null,
+              "stop_details": null,
+              "usage": {
+                "input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "cache_creation": {
+                  "ephemeral_5m_input_tokens": 0,
+                  "ephemeral_1h_input_tokens": 0
+                },
+                "output_tokens": 0,
+                "service_tier": "standard",
+                "inference_geo": "not_available"
+              },
+              "diagnostics": null
+            }
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0032",
+          "ttft_ms": 0
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+              "type": "thinking",
+              "thinking": "",
+              "signature": ""
+            }
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0033"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "system",
+          "subtype": "thinking_tokens",
+          "estimated_tokens": 1,
+          "estimated_tokens_delta": 1,
+          "uuid": "uuid-scrubbed-0034",
+          "session_id": "uuid-scrubbed-0003"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+              "type": "thinking_delta",
+              "thinking": "The",
+              "estimated_tokens": null
+            }
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0035"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "system",
+          "subtype": "thinking_tokens",
+          "estimated_tokens": 21,
+          "estimated_tokens_delta": 20,
+          "uuid": "uuid-scrubbed-0036",
+          "session_id": "uuid-scrubbed-0003"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+              "type": "thinking_delta",
+              "thinking": " Bash command executed successfully and printed \"fixture-hello\" to stdout. The",
+              "estimated_tokens": null
+            }
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0037"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "system",
+          "subtype": "thinking_tokens",
+          "estimated_tokens": 40,
+          "estimated_tokens_delta": 19,
+          "uuid": "uuid-scrubbed-0038",
+          "session_id": "uuid-scrubbed-0003"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+              "type": "thinking_delta",
+              "thinking": " user asked me to tell them exactly what it printed in one short sentence.",
+              "estimated_tokens": null
+            }
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0039"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+              "type": "thinking_delta",
+              "thinking": "",
+              "estimated_tokens": null
+            }
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0040"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "system",
+          "subtype": "thinking_tokens",
+          "estimated_tokens": 102,
+          "estimated_tokens_delta": 62,
+          "uuid": "uuid-scrubbed-0041",
+          "session_id": "uuid-scrubbed-0003"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+              "type": "signature_delta",
+              "signature": "EpIDCpMBCBAYAipANPpqMPeg1dtX43l5VrPysQvOPsNueKEwyuHvW7BE/R/BeFfBoyhx2Y7uKSJHnJgq2x63LW7VlfM+08hjdYRW4zIZY2xhdWRlLWhhaWt1LTQtNS0yMDI1MTAwMTgAQgh0aGlua2luZ1okYzM0MWE5YTYtOWY3Yi00OTEyLWIyNDEtYjExODhiNjBhMWRlEgz9gEk3Ze4RaDSc8rIaDOBNEK4K4GGgpe2SBiIw40icCbG7XTXJZe18dSvO11/aYQGYCmNsZf57rlj6Ks+IuoG6BW9bL9KrmoC2ovX+KqsBFqej1I/bH4D4xpzMaC48TiW6lvFQyVE/qXkb4oPfraty3l82kxz+s2nQWDOgnA8TKfpOjS9SXObA7pjHZ19cHEaCeQHFHixaXD3DyK4OqdA4sf0mVCsjoX1m+5g3ZGKLT56Iy2qF4B+FQDeGM0Qq+2IJcQ4TLHSaVt5N8cG2SMdXz5NTvt3ByQ6pckW5oM+lFC3EFu4bkMN3Ko/cfQH2T2JO8M1Ij+cxIDKvGAE="
+            }
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0042"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "assistant",
+          "message": {
+            "model": "claude-haiku-4-5-20251001",
+            "id": "msg-scrubbed-0003",
+            "type": "message",
+            "role": "assistant",
+            "content": [
+              {
+                "type": "thinking",
+                "thinking": "The Bash command executed successfully and printed \"fixture-hello\" to stdout. The user asked me to tell them exactly what it printed in one short sentence.",
+                "signature": "EpIDCpMBCBAYAipANPpqMPeg1dtX43l5VrPysQvOPsNueKEwyuHvW7BE/R/BeFfBoyhx2Y7uKSJHnJgq2x63LW7VlfM+08hjdYRW4zIZY2xhdWRlLWhhaWt1LTQtNS0yMDI1MTAwMTgAQgh0aGlua2luZ1okYzM0MWE5YTYtOWY3Yi00OTEyLWIyNDEtYjExODhiNjBhMWRlEgz9gEk3Ze4RaDSc8rIaDOBNEK4K4GGgpe2SBiIw40icCbG7XTXJZe18dSvO11/aYQGYCmNsZf57rlj6Ks+IuoG6BW9bL9KrmoC2ovX+KqsBFqej1I/bH4D4xpzMaC48TiW6lvFQyVE/qXkb4oPfraty3l82kxz+s2nQWDOgnA8TKfpOjS9SXObA7pjHZ19cHEaCeQHFHixaXD3DyK4OqdA4sf0mVCsjoX1m+5g3ZGKLT56Iy2qF4B+FQDeGM0Qq+2IJcQ4TLHSaVt5N8cG2SMdXz5NTvt3ByQ6pckW5oM+lFC3EFu4bkMN3Ko/cfQH2T2JO8M1Ij+cxIDKvGAE="
+              }
+            ],
+            "stop_reason": null,
+            "stop_sequence": null,
+            "stop_details": null,
+            "usage": {
+              "input_tokens": 0,
+              "cache_creation_input_tokens": 0,
+              "cache_read_input_tokens": 0,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 0
+              },
+              "output_tokens": 0,
+              "service_tier": "standard",
+              "inference_geo": "not_available"
+            },
+            "diagnostics": null,
+            "context_management": null
+          },
+          "parent_tool_use_id": null,
+          "session_id": "uuid-scrubbed-0003",
+          "uuid": "uuid-scrubbed-0043",
+          "timestamp": "2026-08-17T20:36:40.377Z",
+          "request_id": "req_011Ce8xnSYz64Lz4QZ2MMfi2"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_stop",
+            "index": 0
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0044"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {
+              "type": "text",
+              "text": ""
+            }
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0045"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": {
+              "type": "text_delta",
+              "text": "It printed `fixture-hello`."
+            }
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0046"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "assistant",
+          "message": {
+            "model": "claude-haiku-4-5-20251001",
+            "id": "msg-scrubbed-0003",
+            "type": "message",
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "It printed `fixture-hello`."
+              }
+            ],
+            "stop_reason": null,
+            "stop_sequence": null,
+            "stop_details": null,
+            "usage": {
+              "input_tokens": 0,
+              "cache_creation_input_tokens": 0,
+              "cache_read_input_tokens": 0,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 0
+              },
+              "output_tokens": 0,
+              "service_tier": "standard",
+              "inference_geo": "not_available"
+            },
+            "diagnostics": null,
+            "context_management": null
+          },
+          "parent_tool_use_id": null,
+          "session_id": "uuid-scrubbed-0003",
+          "uuid": "uuid-scrubbed-0047",
+          "timestamp": "2026-08-17T20:36:40.382Z",
+          "request_id": "req_011Ce8xnSYz64Lz4QZ2MMfi2"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_stop",
+            "index": 1
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0048"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "message_delta",
+            "delta": {
+              "stop_reason": "end_turn",
+              "stop_sequence": null,
+              "stop_details": null
+            },
+            "usage": {
+              "input_tokens": 0,
+              "cache_creation_input_tokens": 0,
+              "cache_read_input_tokens": 0,
+              "output_tokens": 0,
+              "output_tokens_details": {
+                "thinking_tokens": 0
+              },
+              "iterations": [
+                {
+                  "input_tokens": 0,
+                  "output_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "cache_creation_input_tokens": 0,
+                  "cache_creation": {
+                    "ephemeral_5m_input_tokens": 0,
+                    "ephemeral_1h_input_tokens": 0
+                  },
+                  "type": "message"
+                }
+              ]
+            },
+            "context_management": {
+              "applied_edits": []
+            }
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0049"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "message_stop"
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0050"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "is_error": false,
+          "duration_api_ms": 0,
+          "num_turns": 0,
+          "stop_reason": "end_turn",
+          "session_id": "uuid-scrubbed-0003",
+          "total_cost_usd": 0,
+          "usage": {
+            "input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 0,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
+            "server_tool_use": {
+              "web_search_requests": 0,
+              "web_fetch_requests": 0
+            },
+            "service_tier": "standard",
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "inference_geo": "not_available",
+            "iterations": [
+              {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cache_creation": {
+                  "ephemeral_5m_input_tokens": 0,
+                  "ephemeral_1h_input_tokens": 0
+                },
+                "type": "message"
+              }
+            ],
+            "speed": "standard"
+          },
+          "modelUsage": {
+            "claude-haiku-4-5-20251001": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0,
+              "webSearchRequests": 0,
+              "costUSD": 0,
+              "contextWindow": 0,
+              "maxOutputTokens": 0,
+              "canonicalModel": "claude-haiku-4-5",
+              "provider": "firstParty"
+            }
+          },
+          "permission_denials": [],
+          "terminal_reason": "completed",
+          "fast_mode_state": "off",
+          "fast_mode_disabled_reason": "sdk_opt_in_required",
+          "subtype": "success",
+          "api_error_status": null,
+          "result": "It printed `fixture-hello`.",
+          "ttft_ms": 0,
+          "ttft_stream_ms": 0,
+          "time_to_request_ms": 0,
+          "user_message_uuid": "uuid-scrubbed-0001",
+          "request_sent_wall_ms": 0,
+          "type": "result",
+          "duration_ms": 0,
+          "uuid": "uuid-scrubbed-0051"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    }
+  ]
+}
