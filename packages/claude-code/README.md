@@ -16,7 +16,7 @@ Consumers:
 > (`packages/claude-code/claude-code/`) is a mechanical move rather than a rename — we do not
 > own the `@deepseek-ai` npm scope and cannot publish into it.
 
-**Phase status: Phase 4 (ask channel).** `open()` is real: it mints the shared dsh/CC id,
+**Phase status: Phase 5 (model-facing tools).** `open()` is real: it mints the shared dsh/CC id,
 resolves the SDK options, spawns (or adopts a pre-warmed) Claude Code subprocess, awaits the
 initialize handshake and registers the session. `send()` / `interrupt()` / `waitForResult()` /
 `onMessage()` / `onSend()` live on the `CcSession` actor, reachable through
@@ -25,11 +25,18 @@ session log — see [Mirroring](#mirroring-into-a-dsh-session-log). Permission p
 clarifying questions and plan reviews now route to the dsh `ctx.approval` / `ctx.userQuestions`
 seams — see [The ask channel](#the-ask-channel).
 
-One thing is still a stub, by design and with the phase named in the code: the model-facing
-`claude_code_*` tools in `@deepseek-ai/dsh-tool-claude-code` are registered-but-inert
-scaffolds until **Phase 5**. A session opened with no ask target still fails CLOSED (every
-tool call denied with an explanation), which is the correct posture for a session nobody is
-watching.
+The six model-facing `claude_code_*` tools in `@deepseek-ai/dsh-tool-claude-code` are now
+**real**: they open (synchronously or as a dsh job), send, wait, report status, cancel and
+close through this seam, and they are what supplies the ask target below. A session opened
+with no ask target still fails CLOSED (every tool call denied with an explanation), which is
+the correct posture for a session nobody is watching.
+
+Still scaffolded, with the phase named in the code:
+
+- **Phase 6** — `@deepseek-ai/dsh-claude-code-agent`, the CC-backed dsh `Agent` adapter. It
+  mounts and logs its marker; it does not yet register an agent.
+- **Phase 7** — rich tool cards. Every tool renders through the generic card today
+  (`presentCall` returns `card: 'generic'`); the Claude-Code-specific views come later.
 
 ### Running the tests
 
@@ -326,8 +333,9 @@ substitutes (`inject()` → `shouldQuery: false` sends, `query.setModel()`,
 ## Model Experience
 
 None **for the dsh model**, as this package registers no tool schema, no system-prompt
-contribution, and no model-visible event. The model-facing surface belongs to
-`@deepseek-ai/dsh-tool-claude-code` (delegation tools, still inert until Phase 5).
+contribution, and no model-visible event. The model-facing surface belongs entirely to
+`@deepseek-ai/dsh-tool-claude-code` (the six live delegation tools — see that package's
+README for what each one costs the model's context window).
 
 What Phase 3 adds is **human**-facing, not model-facing: the mirror projects a Claude Code
 session into a dsh session log, so the harness UI renders a CC session with the same
@@ -396,9 +404,14 @@ over its own transcript, which the dsh mirror neither feeds nor invalidates.
 - **Pre-warming starts helping from the SECOND open** — `startup()` freezes `cwd` (and every
   other option), so the first open of a given shape is always cold and the pool warms
   afterwards for the next one. A changed shape discards the held subprocess.
-- **No model-facing tools yet (Phase 5)** — `@deepseek-ai/dsh-tool-claude-code` registers all
-  six `claude_code_*` schemas so the composition is complete and typed, but their bodies do
-  not drive a session yet. Drive sessions through `ctx.claudeCode` directly until then.
+- **No CC-backed dsh `Agent` yet (Phase 6)** — `@deepseek-ai/dsh-claude-code-agent` mounts
+  and resolves its injects, but registers no agent; and rich tool cards are Phase 7 (every
+  `claude_code_*` call renders through the generic card today). The six model-facing tools
+  themselves are real as of Phase 5 — see `@deepseek-ai/dsh-tool-claude-code`.
+- **A subprocess that dies on its own does not close its session** — a `CcSession` reaches
+  `closed` only through `close()`, so an externally killed CLI leaves the session (and any
+  job tracking it) `running` until something calls `close()`. A seam-side "pump ended →
+  close" path is the fix and is deferred.
 - **A resumed session keeps its id; a live one cannot be resumed** — SDK 0.3.233 refuses a
   caller-supplied `sessionId` alongside `resume` unless `fork` is set, so a plain resume
   continues under the id it resumed. Resuming a session that is still open in this context is

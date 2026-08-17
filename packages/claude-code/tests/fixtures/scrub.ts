@@ -84,6 +84,12 @@ const ID_PATTERNS: ReadonlyArray<{ readonly kind: string, readonly regex: RegExp
  */
 const BLANKET_PATTERNS: ReadonlyArray<{ readonly regex: RegExp, readonly replacement: string }> = [
   { regex: /\.claude\/projects\/[^/"\\]+/g, replacement: '.claude/projects/scrubbed-project-slug' },
+  // `system/init.messaging_socket_path` embeds the live CLI subprocess's own
+  // PID (`/tmp/cc-socks/<pid>.sock`) — a different, non-reproducible value on
+  // every recording run, and not id-shaped enough for the uuid/toolu/msg
+  // patterns below to catch. Left unscrubbed, every `pnpm run test:live` dirties
+  // this field in the checked-in fixtures for no test-relevant reason.
+  { regex: /cc-socks\/\d+\.sock/g, replacement: 'cc-socks/scrubbed.sock' },
 ]
 
 /** One literal substring to replace everywhere it appears (e.g. a recorder's tmp cwd). */

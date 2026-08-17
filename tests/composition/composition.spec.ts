@@ -20,8 +20,14 @@
  * docs/spec-review-and-plan.md §3 warns about. Type-only imports are fine: they
  * are erased, and they are how `ctx.claudeCode` / `ctx.tools` become visible.
  *
- * OFFLINE: Phase 1 mounts configuration and registries only. No Claude Code
- * subprocess is spawned, no network call is made, and no `open()` succeeds.
+ * Phase 5 added the jobs runtime (`dsh-jobs-local` + `dsh-tool-jobs`) that
+ * `claude_code_open({ background: true })` requires, and one real background
+ * tool call through it.
+ *
+ * OFFLINE THROUGHOUT: no Claude Code subprocess is spawned and no network call
+ * is made. Every `open()` this spec triggers is refused by the seam's
+ * spawn-free `cwd` guard, which is also what lets the background test observe a
+ * real job settle `failed` without a subprocess ever existing.
  *
  * Requires `pnpm run build` first; the root `test` script does that for you.
  */
@@ -42,10 +48,13 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import type {} from '@deepseek-ai/dsh-claude-code'
 import type {} from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-agent'
+import type {} from '@deepseek-ai/dsh-jobs'
+import type { ToolExecutionInput } from '@deepseek-ai/dsh-tools'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(here, '..', '..')
 const configPath = path.join(here, 'cordis.yml')
+const noJobsConfigPath = path.join(here, 'cordis-no-jobs.yml')
 
 /**
  * The `cordis.yml` rows, in file order. The root `cordis:include` entry that
@@ -57,6 +66,8 @@ const EXPECTED_ENTRY_IDS = [
   'agents',
   'system-prompt',
   'tools',
+  'jobs',
+  'tool-jobs',
   'claude-code',
   'tool-claude-code',
   'claude-code-agent',
@@ -72,6 +83,13 @@ const TOOL_NAMES = [
   'claude_code_close',
 ] as const
 
+/**
+ * The generic job-control tools a backgrounded Claude Code session is driven
+ * through. They come from `@deepseek-ai/dsh-tool-jobs`, not from us — that is
+ * the point: this integration adds a job KIND, never its own control surface.
+ */
+const JOB_TOOL_NAMES = ['job_list', 'job_output', 'job_kill'] as const
+
 /** Each package's built entry point — what the Loader will actually import. */
 const BUILT_ENTRIES = [
   'packages/claude-code/lib/index.js',
@@ -84,10 +102,11 @@ const BUILT_ENTRIES = [
  * `@deepseek-ai/dsh-app-boot`'s `boot()` without dragging in its launch
  * environment: `ctx.baseUrl` -> `ctx.plugin(Loader)` -> register the
  * `include`/`group` builtins -> create the root include entry -> `await()`.
+ * @param file - the composition file to boot; defaults to `cordis.yml`.
  * @returns the booted root context and the Loader-minted id of the root
- *   `cordis:include` entry that carries `cordis.yml`.
+ *   `cordis:include` entry that carries the file.
  */
-async function boot(): Promise<{ ctx: Context, rootId: string }> {
+async function boot(file = configPath): Promise<{ ctx: Context, rootId: string }> {
   const ctx = new Context()
   ctx.baseUrl = pathToFileURL(here).href + '/'
   await ctx.plugin(Loader)
@@ -97,7 +116,7 @@ async function boot(): Promise<{ ctx: Context, rootId: string }> {
   // `Omit<EntryOptions, 'id'>`); the returned id is the only reliable handle.
   const rootId = await ctx.loader.create({
     name: 'cordis:include',
-    config: { path: pathToFileURL(configPath).href },
+    config: { path: pathToFileURL(file).href },
   })
   await ctx.get('loader')?.await()
   return { ctx, rootId }
@@ -202,6 +221,46 @@ describe('phase 1 acceptance: real cordis.yml + Loader composition', () => {
     }
   })
 
+  it('mounts the jobs runtime background mode needs, with its generic control tools', () => {
+    expect(ctx.get('jobs') !== undefined, 'ctx.jobs should resolve').toBe(true)
+    for (const toolName of JOB_TOOL_NAMES) {
+      expect(ctx.tools.get(toolName) !== undefined, `${toolName} should be registered`).toBe(true)
+    }
+  })
+
+  it('registers a real claude-code job for a background open, and settles it failed offline', async () => {
+    // A relative `cwd` is refused by the seam's spawn-free guard, so this stays
+    // offline — but the refusal happens INSIDE the job's starter, which is
+    // exactly what proves the whole background path is wired: the real
+    // `LocalJobRegistry` accepted `kind: 'claude-code'`, minted an id under
+    // that prefix, and settled the job from the producer's `done` promise
+    // instead of rejecting anywhere.
+    const result = await ctx.tools.execute({
+      signal: new AbortController().signal,
+      // Branded through a cast rather than `CallId()`: importing a value from
+      // `@deepseek-ai/dsh-llm` here would resolve on this spec's plane while
+      // the Loader resolves the packages under test on theirs.
+      callId: 'composition-background' as ToolExecutionInput['callId'],
+      name: 'claude_code_open',
+      arguments: { cwd: 'relative/not-allowed', prompt: 'never runs', background: true },
+    })
+    expect(result.isError).toBe(true)
+    expect(plain(result.error?.info)).toMatchObject({ code: 'INVALID_CWD' })
+
+    const jobs = ctx.jobs.list()
+    expect(jobs).toHaveLength(1)
+    const job = plain(jobs[0]) as { id: string, kind: string, label: string, status: string }
+    expect(job.kind).toBe('claude-code')
+    expect(job.id.startsWith('claude-code')).toBe(true)
+    expect(job.label).toBe('never runs')
+    // `done` resolved (never rejected) with the producer's failure.
+    for (let attempt = 0; attempt < 20 && ctx.jobs.list()[0]?.status === 'running'; attempt += 1) {
+      await new Promise<void>(resolve => { setTimeout(resolve, 1) })
+    }
+    expect(plain(ctx.jobs.list()[0])).toMatchObject({ status: 'failed' })
+    expect(ctx.claudeCode.list()).toEqual([])
+  })
+
   it('mounts the agent adapter plugin (its marker is logged, its services resolve)', () => {
     expect(ctx.get('agents') !== undefined, 'ctx.agents should resolve').toBe(true)
 
@@ -269,5 +328,66 @@ describe('phase 1 acceptance: real cordis.yml + Loader composition', () => {
     for (const key of ['claudeCode', 'tools', 'agents', 'sessions', 'loader'] as const) {
       expect(ctx.get(key), `ctx.${key} should be gone after dispose`).toBeUndefined()
     }
+  })
+})
+
+describe('the SAME composition with no jobs runtime', () => {
+  let ctx: Context
+
+  beforeEach(async () => {
+    ({ ctx } = await boot(noJobsConfigPath))
+  })
+
+  afterEach(async () => {
+    await ctx.fiber.dispose()
+  })
+
+  it('activates every row and registers all six tools without ctx.jobs', () => {
+    const broken = [...ctx.loader.entries()]
+      .filter(entry => entry.fiber === undefined && !entry.disabled)
+      .map(entry => `${entry.options.id} (${String(entry.options.name)})`)
+    expect(broken, 'entries failed to activate').toEqual([])
+
+    // The jobs runtime is genuinely absent — this is the shape under test, not
+    // a composition that merely forgot to await something.
+    expect(ctx.get('jobs')).toBeUndefined()
+    for (const toolName of JOB_TOOL_NAMES) {
+      expect(ctx.tools.get(toolName), `${toolName} should NOT be registered`).toBeUndefined()
+    }
+    // …and every claude_code_* tool mounted anyway: `inject` never names jobs.
+    for (const toolName of TOOL_NAMES) {
+      expect(ctx.tools.get(toolName), `${toolName} should be registered`).not.toBeUndefined()
+    }
+  })
+
+  it('refuses background mode with CC_NO_JOBS naming both packages, and opens nothing', async () => {
+    const result = await ctx.tools.execute({
+      signal: new AbortController().signal,
+      callId: 'composition-no-jobs' as ToolExecutionInput['callId'],
+      name: 'claude_code_open',
+      // A cwd the seam WOULD accept: the refusal must come from the missing
+      // jobs runtime, checked before anything can spawn — not from the guard.
+      arguments: { cwd: repoRoot, prompt: 'never runs', background: true },
+    })
+
+    expect(result.isError).toBe(true)
+    expect(plain(result.error?.info)).toMatchObject({ code: 'CC_NO_JOBS' })
+    const message = String(result.error?.message)
+    expect(message).toContain('@deepseek-ai/dsh-jobs')
+    expect(message).toContain('@deepseek-ai/dsh-tool-jobs')
+    // Nothing spawned, nothing registered: the check happens first.
+    expect(ctx.claudeCode.list()).toEqual([])
+  })
+
+  it('still validates a synchronous open through the same seam guard', async () => {
+    const result = await ctx.tools.execute({
+      signal: new AbortController().signal,
+      callId: 'composition-no-jobs-sync' as ToolExecutionInput['callId'],
+      name: 'claude_code_open',
+      arguments: { cwd: 'relative/not-allowed', prompt: 'never runs' },
+    })
+    expect(result.isError).toBe(true)
+    expect(plain(result.error?.info)).toMatchObject({ code: 'INVALID_CWD' })
+    expect(ctx.claudeCode.list()).toEqual([])
   })
 })

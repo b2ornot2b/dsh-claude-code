@@ -67,7 +67,6 @@
             "EnterWorktree",
             "ExitPlanMode",
             "ExitWorktree",
-            "ListAgents",
             "Monitor",
             "NotebookEdit",
             "PushNotification",
@@ -139,7 +138,6 @@
             "design",
             "design-consent",
             "design-revoke",
-            "list-agents",
             "team-onboarding"
           ],
           "terminal_slash_commands": [
@@ -186,7 +184,6 @@
           "memory_paths": {
             "auto": "/scrubbed/home/.claude/projects/scrubbed-project-slug/memory/"
           },
-          "messaging_socket_path": "/tmp/cc-socks/9889.sock",
           "fast_mode_state": "off",
           "fast_mode_disabled_reason": "sdk_opt_in_required"
         },
@@ -311,8 +308,8 @@
         "message": {
           "type": "system",
           "subtype": "thinking_tokens",
-          "estimated_tokens": 5,
-          "estimated_tokens_delta": 5,
+          "estimated_tokens": 3,
+          "estimated_tokens_delta": 3,
           "uuid": "uuid-scrubbed-0010",
           "session_id": "uuid-scrubbed-0003"
         },
@@ -333,7 +330,7 @@
             "index": 0,
             "delta": {
               "type": "thinking_delta",
-              "thinking": "The user is asking",
+              "thinking": "The user is",
               "estimated_tokens": null
             }
           },
@@ -354,8 +351,8 @@
         "message": {
           "type": "system",
           "subtype": "thinking_tokens",
-          "estimated_tokens": 43,
-          "estimated_tokens_delta": 38,
+          "estimated_tokens": 15,
+          "estimated_tokens_delta": 12,
           "uuid": "uuid-scrubbed-0012",
           "session_id": "uuid-scrubbed-0003"
         },
@@ -376,7 +373,7 @@
             "index": 0,
             "delta": {
               "type": "thinking_delta",
-              "thinking": " me to write exactly two short sentences about the ocean. This is a simple, straightforward request that doesn't require any tools. I just need to write",
+              "thinking": " asking me to write exactly two short sentences",
               "estimated_tokens": null
             }
           },
@@ -397,8 +394,8 @@
         "message": {
           "type": "system",
           "subtype": "thinking_tokens",
-          "estimated_tokens": 85,
-          "estimated_tokens_delta": 42,
+          "estimated_tokens": 24,
+          "estimated_tokens_delta": 9,
           "uuid": "uuid-scrubbed-0014",
           "session_id": "uuid-scrubbed-0003"
         },
@@ -419,7 +416,7 @@
             "index": 0,
             "delta": {
               "type": "thinking_delta",
-              "thinking": " two concise sentences about the ocean.\n\nLet me write two short sentences about the ocean:\n\n1. \"The ocean covers more than 70 percent of Earth's surface and contains",
+              "thinking": " about the ocean. This is a straight",
               "estimated_tokens": null
             }
           },
@@ -440,8 +437,8 @@
         "message": {
           "type": "system",
           "subtype": "thinking_tokens",
-          "estimated_tokens": 108,
-          "estimated_tokens_delta": 23,
+          "estimated_tokens": 33,
+          "estimated_tokens_delta": 9,
           "uuid": "uuid-scrubbed-0016",
           "session_id": "uuid-scrubbed-0003"
         },
@@ -462,7 +459,7 @@
             "index": 0,
             "delta": {
               "type": "thinking_delta",
-              "thinking": " 97 percent of the planet's water.\"\n2. \"It supports countless ecosystems and regulates the",
+              "thinking": "forward request that doesn't require",
               "estimated_tokens": null
             }
           },
@@ -483,8 +480,8 @@
         "message": {
           "type": "system",
           "subtype": "thinking_tokens",
-          "estimated_tokens": 136,
-          "estimated_tokens_delta": 28,
+          "estimated_tokens": 36,
+          "estimated_tokens_delta": 3,
           "uuid": "uuid-scrubbed-0018",
           "session_id": "uuid-scrubbed-0003"
         },
@@ -505,7 +502,7 @@
             "index": 0,
             "delta": {
               "type": "thinking_delta",
-              "thinking": " climate by absorbing heat and carbon dioxide.\"\n\nOr something simpler and more poetic:\n\n1. \"The ocean is Earth",
+              "thinking": " any tools",
               "estimated_tokens": null
             }
           },
@@ -526,8 +523,8 @@
         "message": {
           "type": "system",
           "subtype": "thinking_tokens",
-          "estimated_tokens": 166,
-          "estimated_tokens_delta": 30,
+          "estimated_tokens": 37,
+          "estimated_tokens_delta": 1,
           "uuid": "uuid-scrubbed-0020",
           "session_id": "uuid-scrubbed-0003"
         },
@@ -548,7 +545,7 @@
             "index": 0,
             "delta": {
               "type": "thinking_delta",
-              "thinking": "'s largest wilderness, covering 71% of the planet and remaining largely unexplored.\"\n2. \"Its waves, currents, and depths",
+              "thinking": " -",
               "estimated_tokens": null
             }
           },
@@ -569,8 +566,8 @@
         "message": {
           "type": "system",
           "subtype": "thinking_tokens",
-          "estimated_tokens": 200,
-          "estimated_tokens_delta": 34,
+          "estimated_tokens": 85,
+          "estimated_tokens_delta": 48,
           "uuid": "uuid-scrubbed-0022",
           "session_id": "uuid-scrubbed-0003"
         },
@@ -591,7 +588,7 @@
             "index": 0,
             "delta": {
               "type": "thinking_delta",
-              "thinking": " contain mysteries and life forms that continue to captivate scientists and explorers.\"\n\nLet me go with something clear and engaging:",
+              "thinking": " just a simple text response.\n\nLet me write two short sentences about the ocean:\n\n1. First sentence about the ocean\n2. Second sentence about the ocean\n\nI should keep them concise and accurate.",
               "estimated_tokens": null
             }
           },
@@ -610,36 +607,11 @@
       "kind": "message",
       "envelope": {
         "message": {
-          "type": "stream_event",
-          "event": {
-            "type": "content_block_delta",
-            "index": 0,
-            "delta": {
-              "type": "thinking_delta",
-              "thinking": "",
-              "estimated_tokens": null
-            }
-          },
-          "session_id": "uuid-scrubbed-0003",
-          "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0024"
-        },
-        "meta": {
-          "interruptArtifact": false,
-          "interruptedTurn": false,
-          "reinit": false
-        }
-      }
-    },
-    {
-      "kind": "message",
-      "envelope": {
-        "message": {
           "type": "system",
           "subtype": "thinking_tokens",
-          "estimated_tokens": 266,
-          "estimated_tokens_delta": 66,
-          "uuid": "uuid-scrubbed-0025",
+          "estimated_tokens": 153,
+          "estimated_tokens_delta": 68,
+          "uuid": "uuid-scrubbed-0024",
           "session_id": "uuid-scrubbed-0003"
         },
         "meta": {
@@ -659,12 +631,12 @@
             "index": 0,
             "delta": {
               "type": "signature_delta",
-              "signature": "EqAICqgBCBAYAipA/TZR1Te6+z3PKTW0NupFQDmU8adJXHbxO62wragO53Qf1uDet5IBSJk7E4qfMxRBOrtZUAELV+VChpC6nW+NCTIZY2xhdWRlLWhhaWt1LTQtNS0yMDI1MTAwMTgAQgh0aGlua2luZ1okYzM0MWE5YTYtOWY3Yi00OTEyLWIyNDEtYjExODhiNjBhMWRlchCAh6VC6syYqG9oxmFJxDd3iAEBEgwFf2FaZrXskHaNFEEaDPweWZ8AsqEEkE7CPiIwjVS7IYkCmB1SxClaar1UQ0RzDaNZoeBUboDdqaJKUgZ7EH2I1NzUes80WK1LWW/pKqQGKXW9HmV5FkepWGi8j1bDhOf57e/SRlAFhT56NOsl1Z/TIZXeQz8mGSEOh3dOXnxFICPTuyQAmhWUL+j+LGD3mFEb4LdN9bKc6BF8Bdmp8zW+/reioyEkuMjHXo8QQc//5alEeg0wAoxxnURVDfEc3It2HfA3TL6XIiuewIyCVBkUf2gGecrHBm4BquXIbeUKoYpPQDulaDPzgYclcREU8Nrx6nRrdVx1umWOv7lEl/v9GLR+KCF8olEYP1/vsaRyCJSk6+v1BXhFUmEZxso3LxJBXzLoJsjU5gyBs+V/rVXR5dbOCb7IAFTnl1ARHkF+lNxzNjn1s/ktG2oga9UA+uB65ep0oEwTR0tqpZMlCEaE+a6T7vtHlRT1P3Ty55SUtFPktuP2VcS5Y8p/erFyKS+bOolZXY8JktureHLiv8489v+8Yc3ytcZR8E1tpUvkMt0yCWdOeV3H9rqUsDMZBA+m8Q11abm3cYN+OkcAEkkE2emPqSHcF8ZXa0HVRfZUC0pnxNXGubU/kM4zOJtjpGwd7WSJDiSwscw/1ramhbAvYckRdwIfrovZSubys80pT/QvK6dej+sJtYs2HnrTuryF44SyEjVjxShXrQ94wOkblc1FsxFuiOpIhdco2LPTKWYmw+Wo1uQ5kBIDUsKYT5qeV01rx0mNvgUdEWGeKCmRKirm+vuJOu7/0HyIKMM/xwyf924wYzjGblxNmlPJoSnkXXPA7elUEjPfWurwQLMA4yfKoewJlsV5WSX+Roen+jfjn2hR0fpL3h+J2g1HOyz4kVCiO9UNYTFPG9oddtfBzvatOOfv7/R+45Akw3Wu//cV9kdRWZSWgG189cNxzYIvXmPtxzvTfjH4HZrJm+oikIBcP9GhPWpiapQD1EUoiox3BHYsNXg8vDNYirIep1l+OGZeX3YRFQWAlp8161mMfirTyvd2WRBoSv6rDQjQgThx8rphzs/vixT5NO8h2wrr/6UE+jXPcQUXgyE4nIBR2ZfXGzp0Wzw/ns+OD+2DoHgudLesa8MXaRUpRAYmmVWi45Yo4QkMZ/WdPHiQJc8FVWFGGAE="
+              "signature": "EtoECqgBCBAYAipAKVUgf8VONK08EzWDCZdo1LoZVIxx4rvUer59PjiE8OyfCHiZ6DSb2CWnwLNwKCvl2wpDcNcFYw1JKeUd/mpj1TIZY2xhdWRlLWhhaWt1LTQtNS0yMDI1MTAwMTgAQgh0aGlua2luZ1okYzM0MWE5YTYtOWY3Yi00OTEyLWIyNDEtYjExODhiNjBhMWRlchCAh6VC6syYqG9oxmFJxDd3iAEBEgzaFA1Xbl/XrTYCm5AaDFBMsi2LYu5cNT/xQiIwQpFTBj3ppbHyTZ0vL1bDqqYV1lwNC7onw38HGOZUgwu/0EABPmOgmS0gjmtPN7y6Kt4ClsH3IxABqtklkCMxiB3ON7wyirAK78QuDjEnJv4+ATe6hZSf63OfIHEXhHk0FzOahqQqey1a911QVEv9VdZVpMuXrsJfZNypR81C9iEMaeYSNvIgmy75jhPpN5x15jlydj0/PbJd2bAfcKDduyEwENNfM9kYjGdIvewfA/mBmtBSvQdwIhUIDDLVDKhjYi/TgISIYjsIqJmMJkYJuoNTvQkafki9NWlrvxc9LwvNoUPqRTW52V94FUyN3iVGHWFKBL6E2P96wSycWaEOCWpaSBHO5uXCA4+ktnhbCfS4e5rwqPOZqIa7tV/KxzV+Da4mAn28wk3KF9mbOD8Z29EpaV3szTPNsBYoHiE6guZ5Agvg75kkmur4lXQWhx5FbXMvfpvo3o6siyH96gaCZaUJoPWLrze6m8PZ9bDB4MB8ZPKb6+Qp3AGWLbW7s1dyHF6vOtvK+PK1wr64aBOGMuQYAQ=="
             }
           },
           "session_id": "uuid-scrubbed-0003",
           "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0026"
+          "uuid": "uuid-scrubbed-0025"
         },
         "meta": {
           "interruptArtifact": false,
@@ -686,8 +658,8 @@
             "content": [
               {
                 "type": "thinking",
-                "thinking": "The user is asking me to write exactly two short sentences about the ocean. This is a simple, straightforward request that doesn't require any tools. I just need to write two concise sentences about the ocean.\n\nLet me write two short sentences about the ocean:\n\n1. \"The ocean covers more than 70 percent of Earth's surface and contains 97 percent of the planet's water.\"\n2. \"It supports countless ecosystems and regulates the climate by absorbing heat and carbon dioxide.\"\n\nOr something simpler and more poetic:\n\n1. \"The ocean is Earth's largest wilderness, covering 71% of the planet and remaining largely unexplored.\"\n2. \"Its waves, currents, and depths contain mysteries and life forms that continue to captivate scientists and explorers.\"\n\nLet me go with something clear and engaging:",
-                "signature": "EqAICqgBCBAYAipA/TZR1Te6+z3PKTW0NupFQDmU8adJXHbxO62wragO53Qf1uDet5IBSJk7E4qfMxRBOrtZUAELV+VChpC6nW+NCTIZY2xhdWRlLWhhaWt1LTQtNS0yMDI1MTAwMTgAQgh0aGlua2luZ1okYzM0MWE5YTYtOWY3Yi00OTEyLWIyNDEtYjExODhiNjBhMWRlchCAh6VC6syYqG9oxmFJxDd3iAEBEgwFf2FaZrXskHaNFEEaDPweWZ8AsqEEkE7CPiIwjVS7IYkCmB1SxClaar1UQ0RzDaNZoeBUboDdqaJKUgZ7EH2I1NzUes80WK1LWW/pKqQGKXW9HmV5FkepWGi8j1bDhOf57e/SRlAFhT56NOsl1Z/TIZXeQz8mGSEOh3dOXnxFICPTuyQAmhWUL+j+LGD3mFEb4LdN9bKc6BF8Bdmp8zW+/reioyEkuMjHXo8QQc//5alEeg0wAoxxnURVDfEc3It2HfA3TL6XIiuewIyCVBkUf2gGecrHBm4BquXIbeUKoYpPQDulaDPzgYclcREU8Nrx6nRrdVx1umWOv7lEl/v9GLR+KCF8olEYP1/vsaRyCJSk6+v1BXhFUmEZxso3LxJBXzLoJsjU5gyBs+V/rVXR5dbOCb7IAFTnl1ARHkF+lNxzNjn1s/ktG2oga9UA+uB65ep0oEwTR0tqpZMlCEaE+a6T7vtHlRT1P3Ty55SUtFPktuP2VcS5Y8p/erFyKS+bOolZXY8JktureHLiv8489v+8Yc3ytcZR8E1tpUvkMt0yCWdOeV3H9rqUsDMZBA+m8Q11abm3cYN+OkcAEkkE2emPqSHcF8ZXa0HVRfZUC0pnxNXGubU/kM4zOJtjpGwd7WSJDiSwscw/1ramhbAvYckRdwIfrovZSubys80pT/QvK6dej+sJtYs2HnrTuryF44SyEjVjxShXrQ94wOkblc1FsxFuiOpIhdco2LPTKWYmw+Wo1uQ5kBIDUsKYT5qeV01rx0mNvgUdEWGeKCmRKirm+vuJOu7/0HyIKMM/xwyf924wYzjGblxNmlPJoSnkXXPA7elUEjPfWurwQLMA4yfKoewJlsV5WSX+Roen+jfjn2hR0fpL3h+J2g1HOyz4kVCiO9UNYTFPG9oddtfBzvatOOfv7/R+45Akw3Wu//cV9kdRWZSWgG189cNxzYIvXmPtxzvTfjH4HZrJm+oikIBcP9GhPWpiapQD1EUoiox3BHYsNXg8vDNYirIep1l+OGZeX3YRFQWAlp8161mMfirTyvd2WRBoSv6rDQjQgThx8rphzs/vixT5NO8h2wrr/6UE+jXPcQUXgyE4nIBR2ZfXGzp0Wzw/ns+OD+2DoHgudLesa8MXaRUpRAYmmVWi45Yo4QkMZ/WdPHiQJc8FVWFGGAE="
+                "thinking": "The user is asking me to write exactly two short sentences about the ocean. This is a straightforward request that doesn't require any tools - just a simple text response.\n\nLet me write two short sentences about the ocean:\n\n1. First sentence about the ocean\n2. Second sentence about the ocean\n\nI should keep them concise and accurate.",
+                "signature": "EtoECqgBCBAYAipAKVUgf8VONK08EzWDCZdo1LoZVIxx4rvUer59PjiE8OyfCHiZ6DSb2CWnwLNwKCvl2wpDcNcFYw1JKeUd/mpj1TIZY2xhdWRlLWhhaWt1LTQtNS0yMDI1MTAwMTgAQgh0aGlua2luZ1okYzM0MWE5YTYtOWY3Yi00OTEyLWIyNDEtYjExODhiNjBhMWRlchCAh6VC6syYqG9oxmFJxDd3iAEBEgzaFA1Xbl/XrTYCm5AaDFBMsi2LYu5cNT/xQiIwQpFTBj3ppbHyTZ0vL1bDqqYV1lwNC7onw38HGOZUgwu/0EABPmOgmS0gjmtPN7y6Kt4ClsH3IxABqtklkCMxiB3ON7wyirAK78QuDjEnJv4+ATe6hZSf63OfIHEXhHk0FzOahqQqey1a911QVEv9VdZVpMuXrsJfZNypR81C9iEMaeYSNvIgmy75jhPpN5x15jlydj0/PbJd2bAfcKDduyEwENNfM9kYjGdIvewfA/mBmtBSvQdwIhUIDDLVDKhjYi/TgISIYjsIqJmMJkYJuoNTvQkafki9NWlrvxc9LwvNoUPqRTW52V94FUyN3iVGHWFKBL6E2P96wSycWaEOCWpaSBHO5uXCA4+ktnhbCfS4e5rwqPOZqIa7tV/KxzV+Da4mAn28wk3KF9mbOD8Z29EpaV3szTPNsBYoHiE6guZ5Agvg75kkmur4lXQWhx5FbXMvfpvo3o6siyH96gaCZaUJoPWLrze6m8PZ9bDB4MB8ZPKb6+Qp3AGWLbW7s1dyHF6vOtvK+PK1wr64aBOGMuQYAQ=="
               }
             ],
             "stop_reason": null,
@@ -710,9 +682,9 @@
           },
           "parent_tool_use_id": null,
           "session_id": "uuid-scrubbed-0003",
-          "uuid": "uuid-scrubbed-0027",
-          "timestamp": "2026-08-17T21:46:30.253Z",
-          "request_id": "req_011Ce9477DFt1jusSbxxUweQ"
+          "uuid": "uuid-scrubbed-0026",
+          "timestamp": "2026-08-17T22:46:17.501Z",
+          "request_id": "req_011Ce98fh7ZEd33m68YgZrnj"
         },
         "meta": {
           "interruptArtifact": false,
@@ -732,7 +704,7 @@
           },
           "session_id": "uuid-scrubbed-0003",
           "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0028"
+          "uuid": "uuid-scrubbed-0027"
         },
         "meta": {
           "interruptArtifact": false,
@@ -756,6 +728,30 @@
           },
           "session_id": "uuid-scrubbed-0003",
           "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0028"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": {
+              "type": "text_delta",
+              "text": "The ocean covers more than 70% of Earth's surface and plays a crucial role in regulating our planet's climate and oxygen production. Its depths remain"
+            }
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
           "uuid": "uuid-scrubbed-0029"
         },
         "meta": {
@@ -775,36 +771,12 @@
             "index": 1,
             "delta": {
               "type": "text_delta",
-              "text": "The ocean covers over 70% of Earth's surface and is home to millions of species, from tiny plankton to massive whales. It plays a crucial role in"
+              "text": " largely unexplored, with vast ecosystems of creatures adapted to extreme pressure and darkness."
             }
           },
           "session_id": "uuid-scrubbed-0003",
           "parent_tool_use_id": null,
           "uuid": "uuid-scrubbed-0030"
-        },
-        "meta": {
-          "interruptArtifact": false,
-          "interruptedTurn": false,
-          "reinit": false
-        }
-      }
-    },
-    {
-      "kind": "message",
-      "envelope": {
-        "message": {
-          "type": "stream_event",
-          "event": {
-            "type": "content_block_delta",
-            "index": 1,
-            "delta": {
-              "type": "text_delta",
-              "text": " regulating the planet's climate and producing much of the oxygen we breathe."
-            }
-          },
-          "session_id": "uuid-scrubbed-0003",
-          "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0031"
         },
         "meta": {
           "interruptArtifact": false,
@@ -826,7 +798,7 @@
             "content": [
               {
                 "type": "text",
-                "text": "The ocean covers over 70% of Earth's surface and is home to millions of species, from tiny plankton to massive whales. It plays a crucial role in regulating the planet's climate and producing much of the oxygen we breathe."
+                "text": "The ocean covers more than 70% of Earth's surface and plays a crucial role in regulating our planet's climate and oxygen production. Its depths remain largely unexplored, with vast ecosystems of creatures adapted to extreme pressure and darkness."
               }
             ],
             "stop_reason": null,
@@ -849,9 +821,9 @@
           },
           "parent_tool_use_id": null,
           "session_id": "uuid-scrubbed-0003",
-          "uuid": "uuid-scrubbed-0032",
-          "timestamp": "2026-08-17T21:46:30.431Z",
-          "request_id": "req_011Ce9477DFt1jusSbxxUweQ"
+          "uuid": "uuid-scrubbed-0031",
+          "timestamp": "2026-08-17T22:46:17.703Z",
+          "request_id": "req_011Ce98fh7ZEd33m68YgZrnj"
         },
         "meta": {
           "interruptArtifact": false,
@@ -871,7 +843,7 @@
           },
           "session_id": "uuid-scrubbed-0003",
           "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0033"
+          "uuid": "uuid-scrubbed-0032"
         },
         "meta": {
           "interruptArtifact": false,
@@ -920,7 +892,7 @@
           },
           "session_id": "uuid-scrubbed-0003",
           "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0034"
+          "uuid": "uuid-scrubbed-0033"
         },
         "meta": {
           "interruptArtifact": false,
@@ -939,7 +911,7 @@
           },
           "session_id": "uuid-scrubbed-0003",
           "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0035"
+          "uuid": "uuid-scrubbed-0034"
         },
         "meta": {
           "interruptArtifact": false,
@@ -1011,7 +983,7 @@
           "fast_mode_disabled_reason": "sdk_opt_in_required",
           "subtype": "success",
           "api_error_status": null,
-          "result": "The ocean covers over 70% of Earth's surface and is home to millions of species, from tiny plankton to massive whales. It plays a crucial role in regulating the planet's climate and producing much of the oxygen we breathe.",
+          "result": "The ocean covers more than 70% of Earth's surface and plays a crucial role in regulating our planet's climate and oxygen production. Its depths remain largely unexplored, with vast ecosystems of creatures adapted to extreme pressure and darkness.",
           "ttft_ms": 0,
           "ttft_stream_ms": 0,
           "time_to_request_ms": 0,
@@ -1019,7 +991,7 @@
           "request_sent_wall_ms": 0,
           "type": "result",
           "duration_ms": 0,
-          "uuid": "uuid-scrubbed-0036"
+          "uuid": "uuid-scrubbed-0035"
         },
         "meta": {
           "interruptArtifact": false,
