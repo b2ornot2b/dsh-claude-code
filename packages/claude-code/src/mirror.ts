@@ -171,7 +171,7 @@ export interface CcMirrorOptions {
   /**
    * Also mirror the TEXT of subagent (`parent_tool_use_id !== null`) traffic.
    * Off by default: only a subagent's `tool_use`/`tool_result` pairs are
-   * mirrored, which is what the ask channel (Phase 4) and the transcript need.
+   * mirrored, which is what the ask channel and the transcript need.
    *
    * Known loss when on: dsh's `assistant/chunk` payload is the closed
    * `StreamChunk` union and `tool/call` has no free field, so
@@ -229,7 +229,7 @@ export interface CcMirrorSource {
 
 /** A live mirror attachment. */
 export interface CcMirrorHandle {
-  /** The mirror itself — Phase 4 reads {@link CcMirror.callIdFor} off it. */
+  /** The mirror itself — the ask channel reads {@link CcMirror.hasEmittedCall} / {@link CcMirror.ensureToolCall} off it. */
   readonly mirror: CcMirror
   /**
    * Unsubscribe from the session. Idempotent; appends nothing.
@@ -309,12 +309,19 @@ export class CcMirror {
   readonly #provider: string
   readonly #logger: CcLogger | undefined
 
-  /** cc `tool_use` id → dsh {@link CallId}. Phase 4's ask router reads this. */
+  /** cc `tool_use` id → dsh {@link CallId}. The ask router reads this. */
   readonly #callIds = new Map<string, CallId>()
   /** The reverse index, so a decision carrying a dsh call id can name the cc tool. */
   readonly #toolUseIds = new Map<string, string>()
   /** Calls appended in the current step and not yet resulted. */
   readonly #pending = new Map<string, PendingCall>()
+  /**
+   * Every `tool_use` id a `tool/call` was APPENDED for, for the session's whole
+   * life. Distinct from {@link CcMirror.#pending}, which is cleared at every
+   * `step/end`: the ask channel asks "has the UI seen this call?" (§4.4), and
+   * that answer must not become false again once a result lands.
+   */
+  readonly #emitted = new Set<string>()
   /**
    * `followup` prompts sent while a turn was already open. Claude Code queues
    * them; they become the NEXT turn, so their `user/message` waits for its
@@ -362,7 +369,7 @@ export class CcMirror {
   }
 
   /**
-   * The `tool_use` id → {@link CallId} table, exposed for Phase 4: the ask
+   * The `tool_use` id → {@link CallId} table, exposed for the ask channel: the ask
    * router receives CC's `toolUseID` and needs the dsh call id to correlate an
    * `approval/asked` event with the `tool/call` already in the log.
    */
@@ -397,6 +404,53 @@ export class CcMirror {
    */
   toolUseIdFor(callId: CallId): string | undefined {
     return this.#toolUseIds.get(callId)
+  }
+
+  /**
+   * Whether a `tool/call` for this CC `tool_use` id has actually been APPENDED
+   * to the dsh log.
+   *
+   * Not the same question as `callIds.has(id)`: {@link CcMirror.callIdFor}
+   * mints on demand, and the ask channel must never hand dsh a `callId` the UI
+   * has not seen (§4.4) — a prompt would attach itself to a tool call that
+   * exists nowhere in the transcript.
+   *
+   * @param toolUseId - CC's `tool_use` block id.
+   * @returns true when the log already contains that call.
+   */
+  hasEmittedCall(toolUseId: string): boolean {
+    return this.#emitted.has(toolUseId)
+  }
+
+  /**
+   * §4.4's synthesize step: guarantee the log holds a `tool/call` for one CC
+   * `tool_use` id, appending one from the permission request's own arguments
+   * when the streamed block has not landed yet.
+   *
+   * Called by the ask router only after a bounded wait for the natural event,
+   * and only ever for the tool call being decided — this is a repair path, not
+   * a second source of truth.
+   *
+   * @param toolUseId - CC's `tool_use` block id.
+   * @param toolName - the tool being decided.
+   * @param input - the tool input as `canUseTool` received it.
+   * @returns the dsh call id now present in the log.
+   */
+  ensureToolCall(toolUseId: string, toolName: string, input: Record<string, unknown>): CallId {
+    const callId = this.callIdFor(toolUseId)
+    if (this.#emitted.has(toolUseId)) return callId
+    // Guarded: a synthesis that threw at the ask channel would reject the
+    // permission promise, and a rejected canUseTool hangs the CLI forever.
+    this.guard('ensureToolCall', () => {
+      const framing = this.ensureStep()
+      this.emitToolCall({
+        type: 'tool-call',
+        id: callId,
+        name: toolName,
+        arguments: stringifyArguments(input),
+      }, framing)
+    })
+    return callId
   }
 
   /** What was appended, and what was ignored. */
@@ -892,6 +946,7 @@ export class CcMirror {
       arguments: block.arguments,
     })
     this.#pending.set(toolUseId, { callId: block.id, step: framing.step })
+    this.#emitted.add(toolUseId)
     this.emitTodoWrite(block)
   }
 

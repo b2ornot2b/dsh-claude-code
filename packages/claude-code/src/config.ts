@@ -40,6 +40,19 @@ export interface CcDefaultsConfig {
   readonly appendSystemPrompt?: string
 }
 
+/**
+ * One preseeded "always allow" rule for the integration-owned rule cache
+ * (`src/ask/rules.ts`). The shape is the SDK's own `PermissionRuleValue`, so a
+ * configured entry can be compared field for field against the suggestion the
+ * CLI attaches to a permission prompt.
+ */
+export interface CcAskRuleConfig {
+  /** The tool the rule is about (`'Bash'`, `'Read'`, …). */
+  readonly toolName: string
+  /** The rule body (`'npm test:*'`). Absent means the whole tool. */
+  readonly ruleContent?: string
+}
+
 /** Ask-channel policy: how permission/question prompts are waited on and what happens when nobody can answer. */
 export interface CcAskConfig {
   /** Wait before an ask falls back. Unset means pend indefinitely (the interactive posture). */
@@ -61,11 +74,19 @@ export interface CcAskConfig {
    */
   readonly persistAlwaysAllow?: boolean
   /**
-   * Where that rule cache lives. Unset means the harness-default location
-   * (resolved in Phase 4, when the cache is first written). Ignored when
+   * Where that rule cache lives. An absolute path is used as given; a relative
+   * one resolves against the session's `cwd`. Unset means
+   * `<cwd>/.dsh-claude-code/always-allow.json`. Ignored when
    * `persistAlwaysAllow` is false.
    */
   readonly ruleCachePath?: string
+  /**
+   * Rules preseeded into that cache: consulted exactly like stored ones, never
+   * written back to the file. The way to grant a repeatable command
+   * (`Bash(npm test:*)`) in a composition that has no interactive answerer at
+   * all. Defaults to none.
+   */
+  readonly rules?: CcAskRuleConfig[]
 }
 
 /** Resource ceilings for the composition. */
@@ -138,6 +159,7 @@ export interface ResolvedClaudeCodeConfig {
     readonly fallback: AskFallback
     readonly persistAlwaysAllow: boolean
     readonly ruleCachePath?: string
+    readonly rules: readonly CcAskRuleConfig[]
   }
   readonly limits: {
     readonly maxConcurrentSessions: number
@@ -169,6 +191,10 @@ export const Config: z<ClaudeCodeConfig> = z.object({
     fallback: z.union(ASK_FALLBACKS).default('deny'),
     persistAlwaysAllow: z.boolean().default(true),
     ruleCachePath: z.string(),
+    rules: z.array(z.object({
+      toolName: z.string().required(),
+      ruleContent: z.string(),
+    })).default([]),
   }),
   limits: z.object({
     maxConcurrentSessions: z.number().step(1).min(1).default(DEFAULT_MAX_CONCURRENT_SESSIONS),
@@ -222,6 +248,7 @@ export function resolveClaudeCodeConfig(config: ClaudeCodeConfig = {}): Resolved
       fallback: ask.fallback ?? 'deny',
       persistAlwaysAllow: ask.persistAlwaysAllow ?? true,
       ...optional('ruleCachePath', ask.ruleCachePath),
+      rules: ask.rules ?? [],
     },
     limits: {
       maxConcurrentSessions: limits.maxConcurrentSessions ?? DEFAULT_MAX_CONCURRENT_SESSIONS,

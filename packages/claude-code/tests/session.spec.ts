@@ -109,7 +109,7 @@ describe('CcSession: construction options (§3.2)', () => {
     expect('forkSession' in query.options).toBe(false)
   })
 
-  it('denies every tool call when no permission router is wired (fail closed)', async () => {
+  it('denies every tool call when no ask channel is wired (fail closed)', async () => {
     const { query } = await open()
     const decision = await query.options.canUseTool?.(
       'Bash',
@@ -117,7 +117,9 @@ describe('CcSession: construction options (§3.2)', () => {
       { signal: new AbortController().signal, toolUseID: 'tool-1', requestId: 'req-1' })
 
     expect(decision?.behavior).toBe('deny')
-    expect(decision).toMatchObject({ message: expect.stringContaining('Phase 4') as unknown as string })
+    expect(decision).toMatchObject({
+      message: expect.stringContaining('no dsh ask channel') as unknown as string,
+    })
   })
 })
 

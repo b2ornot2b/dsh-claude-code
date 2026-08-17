@@ -31,6 +31,7 @@ import type {
   CcAccountData, CcBackendQuery, CcCanUseTool, CcInitializeResult, CcInterruptReceipt,
   CcPermissionDecision, CcPermissionRequest, CcQueryOptions, CcSdkMessage, CcUuid, QueryBackend,
 } from './backend.ts'
+import type { CcAskCallSite, CcAskTarget } from './ask/types.ts'
 import type { ResolvedClaudeCodeConfig } from './config.ts'
 import { createInputStream } from './input-stream.ts'
 import type { CcInputStream } from './input-stream.ts'
@@ -183,6 +184,45 @@ export interface CcSessionOptions {
   readonly fork?: boolean
 }
 
+/**
+ * The ask channel one session is wired to (Phase 4's `CcAskRouter` satisfies it
+ * structurally).
+ *
+ * Stated here, in the session's own vocabulary, so the actor depends on the
+ * CAPABILITY rather than on the router class: a test drives a two-line double,
+ * and a session constructed without one still fails closed.
+ */
+export interface CcAskChannel {
+  /** The permission callback the SDK is given. */
+  readonly canUseTool: CcCanUseTool
+  /** How many asks are awaiting an answer right now. */
+  readonly pendingAsks: number
+  /**
+   * Set who answers for this session.
+   * @param target - the dsh agent and its optional seam overrides.
+   * @returns a disposer detaching exactly this target.
+   */
+  attachTarget(target: CcAskTarget): () => void
+  /**
+   * Point the channel at the mirror that logs this session's tool calls (§4.4).
+   * @param site - the mirror.
+   * @returns a disposer detaching exactly this call site.
+   */
+  attachCallSite(site: CcAskCallSite): () => void
+  /**
+   * Settle every pending ask as denied (the session's close path).
+   * @param message - the deny message.
+   * @returns how many asks were settled.
+   */
+  settleAll(message?: string): number
+  /**
+   * Subscribe to unanswerable-ask failures (`askFallback: 'error'`).
+   * @param listener - called with the typed `ASK_UNANSWERABLE` error.
+   * @returns an unsubscribe function.
+   */
+  onError(listener: (error: ClaudeCodeError) => void): () => void
+}
+
 /** Everything a session needs from its surroundings. Injected so unit tests run offline. */
 export interface CcSessionDeps {
   /** The SDK boundary. Tests pass a fake. */
@@ -192,11 +232,18 @@ export interface CcSessionDeps {
   /** Subprocess stderr / diagnostics sink. */
   readonly logger?: CcLogger
   /**
-   * The permission callback. Phase 4 replaces this with the ask router; when
-   * omitted the session fails CLOSED — every tool call is denied with an
+   * An explicit permission callback, overriding {@link CcSessionDeps.asks}.
+   * Tests use it to script decisions; production wires the ask channel instead.
+   * With neither, the session fails CLOSED — every tool call is denied with an
    * explanation, never silently allowed.
    */
   readonly canUseTool?: CcCanUseTool
+  /**
+   * The dsh ask channel (§4): permission prompts, clarifying questions and plan
+   * reviews routed to `ctx.approval` / `ctx.userQuestions`. Owns the pending-ask
+   * table, so it also answers {@link CcSession.pendingAsks} and drains on close.
+   */
+  readonly asks?: CcAskChannel
   /**
    * Resolve the API key for `auth: 'api-key'`. Phase 5 wires
    * `ctx.credentials.get(config.apiKeyRef)`; until then the hook is typed and
@@ -253,10 +300,10 @@ interface ResultWaiter {
 /** Default poll interval between drain attempts. */
 const DEFAULT_DRAIN_POLL_MS = 250
 
-/** Fail-closed permission answer used until Phase 4 installs the ask router. */
+/** Fail-closed permission answer for a session wired to no ask channel at all. */
 const DEFAULT_DENY_MESSAGE
-  = 'Denied: this Claude Code session has no permission answerer wired yet '
-  + '(the dsh ask channel lands in Phase 4). Nothing was executed.'
+  = 'Denied: this Claude Code session has no dsh ask channel attached, so no permission answerer '
+  + 'exists. Nothing was executed.'
 
 /**
  * One live Claude Code session.
@@ -282,6 +329,8 @@ export class CcSession {
   readonly #turnBoundaryWaiters = new Set<() => void>()
   /** One-shot close subscribers (the service's registry cleanup). */
   readonly #closeListeners = new Set<() => void>()
+  /** Subscribers to unanswerable-ask failures. */
+  readonly #askErrorListeners = new Set<(error: ClaudeCodeError) => void>()
 
   #status: CcSessionStatus = 'starting'
   #query: CcBackendQuery | undefined
@@ -292,6 +341,8 @@ export class CcSession {
   #model: string | undefined
   #contextUsage: CcContextUsage | undefined
   #lastResult: CcMessageEnvelope | undefined
+  /** The last `ASK_UNANSWERABLE` failure the ask channel reported. */
+  #lastAskError: ClaudeCodeError | undefined
   #closed = false
   #closing: Promise<void> | undefined
   /**
@@ -322,6 +373,12 @@ export class CcSession {
     // A leased subprocess was started with ITS controller; adopting it is what
     // keeps `close()`'s abort meaningful for a warm session.
     this.#abort = deps.warm?.abortController ?? new AbortController()
+    // The channel is per-session and dies with it, so this subscription needs no
+    // disposer of its own.
+    deps.asks?.onError((error) => {
+      this.#lastAskError = error
+      this.emitAskError(error)
+    })
   }
 
   /** Lifecycle state: `starting` → `idle` ⇄ `running` → `closed`. */
@@ -329,9 +386,20 @@ export class CcSession {
     return this.#status
   }
 
-  /** Permission/question asks awaiting an answer. Always 0 until Phase 4. */
+  /** Permission/question asks awaiting an answer (§4.6). Zero without an ask channel. */
   get pendingAsks(): number {
-    return 0
+    return this.#deps.asks?.pendingAsks ?? 0
+  }
+
+  /**
+   * The last unanswerable-ask failure, when `ask.fallback` is `'error'`.
+   *
+   * `'error'` denies with `interrupt: true` AND surfaces the failure here (and
+   * to {@link CcSession.onAskError}) so the owning tool call can report the
+   * routing failure instead of the model quietly improvising around it.
+   */
+  get lastAskError(): ClaudeCodeError | undefined {
+    return this.#lastAskError
   }
 
   /** The CLI capabilities advertised on the latest `system/init` (feature-detect on these, never on a version). */
@@ -428,6 +496,48 @@ export class CcSession {
     this.#closeListeners.add(listener)
     return () => {
       this.#closeListeners.delete(listener)
+    }
+  }
+
+  /**
+   * Attach WHO answers this session's permission prompts, clarifying questions
+   * and plan reviews (§4.5).
+   *
+   * Attach it BEFORE the first prompt: a tool call that lands with no target
+   * is denied fail-closed, which is safe but wastes a turn.
+   *
+   * @param target - the dsh agent and its optional seam overrides.
+   * @returns a disposer detaching exactly this target.
+   * @throws {ClaudeCodeError} code `ASK_UNAVAILABLE` when the session was
+   *   constructed without an ask channel (a white-box test, or a consumer that
+   *   supplied its own `canUseTool`).
+   */
+  attachAskTarget(target: CcAskTarget): () => void {
+    return this.askChannel().attachTarget(target)
+  }
+
+  /**
+   * Point the ask channel at the mirror that logs this session's tool calls, so
+   * an approval request can carry the `callId` of a call the UI already
+   * streamed (§4.4). Owned by the service, which owns the mirror.
+   *
+   * @param site - the mirror.
+   * @returns a disposer detaching exactly this call site.
+   * @throws {ClaudeCodeError} code `ASK_UNAVAILABLE` without an ask channel.
+   */
+  attachAskCallSite(site: CcAskCallSite): () => void {
+    return this.askChannel().attachCallSite(site)
+  }
+
+  /**
+   * Subscribe to unanswerable-ask failures (`ask.fallback: 'error'`).
+   * @param listener - called with the typed `ASK_UNANSWERABLE` error.
+   * @returns an unsubscribe function.
+   */
+  onAskError(listener: (error: ClaudeCodeError) => void): () => void {
+    this.#askErrorListeners.add(listener)
+    return () => {
+      this.#askErrorListeners.delete(listener)
     }
   }
 
@@ -641,7 +751,8 @@ export class CcSession {
    */
   private async runClose(): Promise<void> {
     this.#closed = true
-    // 1. Settle pending asks (no-op until Phase 4 owns the ask table).
+    // 1. Settle pending asks — nothing may be left holding a promise the
+    //    closed query can never answer (§4.6).
     this.settleAsks()
     // 2. Abort in-flight work, 3. close the query, 4. end the input stream.
     this.#abort.abort()
@@ -660,6 +771,7 @@ export class CcSession {
     this.#turnBoundaryWaiters.clear()
     this.#listeners.clear()
     this.#sendListeners.clear()
+    this.#askErrorListeners.clear()
     for (const listener of [...this.#closeListeners]) {
       try {
         listener()
@@ -679,13 +791,51 @@ export class CcSession {
   }
 
   /**
-   * Settle every pending ask as denied. A no-op until Phase 4 introduces the ask
-   * table; it exists now so the close ORDER is already correct and Phase 4 only
-   * fills in the body.
+   * Settle every pending ask as denied.
+   *
+   * Runs FIRST on the close path (§5.4): a subprocess holding a permission
+   * promise nobody will ever resolve is exactly the leak `close()` exists to
+   * prevent, and the SDK cancels the wait only when the query is cancelled.
    * @returns nothing.
    */
   private settleAsks(): void {
-    // Phase 4: deny every entry in the ask table, keyed by requestId.
+    const settled = this.#deps.asks?.settleAll() ?? 0
+    if (settled > 0) {
+      this.#deps.logger?.debug(
+        `claude-code: session ${this.id} denied ${settled} pending ask(s) on close`)
+    }
+  }
+
+  /**
+   * The ask channel, or a typed failure naming the reason there is none.
+   * @returns the channel.
+   * @throws {ClaudeCodeError} code `ASK_UNAVAILABLE`.
+   */
+  private askChannel(): CcAskChannel {
+    const asks = this.#deps.asks
+    if (asks === undefined) {
+      throw new ClaudeCodeError(
+        `claude-code: session ${this.id} was constructed without a dsh ask channel, so nothing can `
+        + 'answer its permission prompts',
+        'ASK_UNAVAILABLE')
+    }
+    return asks
+  }
+
+  /**
+   * Fan one unanswerable-ask failure out, isolating listener failures.
+   * @param error - the typed failure.
+   * @returns nothing.
+   */
+  private emitAskError(error: ClaudeCodeError): void {
+    for (const listener of [...this.#askErrorListeners]) {
+      try {
+        listener(error)
+      } catch (failure) {
+        this.#deps.logger?.debug(
+          `claude-code: session ${this.id} ask-error listener threw: ${describe(failure)}`)
+      }
+    }
   }
 
   /**
@@ -999,7 +1149,7 @@ export class CcSession {
 }
 
 /** The slice of {@link CcSessionDeps} that option resolution actually reads. */
-export type CcQueryOptionDeps = Pick<CcSessionDeps, 'config' | 'canUseTool' | 'logger' | 'resolveApiKey'>
+export type CcQueryOptionDeps = Pick<CcSessionDeps, 'config' | 'canUseTool' | 'asks' | 'logger' | 'resolveApiKey'>
 
 /**
  * Build the SDK options for one session (§3.2, with the review's corrections).
@@ -1050,7 +1200,9 @@ export async function resolveQueryOptions(
     // CLAUDE.md into an embedded agent (delta S1).
     settingSources: [...config.defaults.settingSources],
     includePartialMessages: true,
-    canUseTool: deps.canUseTool ?? denyAll,
+    // Precedence: an explicitly injected callback (tests, bespoke consumers),
+    // then the dsh ask channel, then fail-closed.
+    canUseTool: deps.canUseTool ?? deps.asks?.canUseTool ?? denyAll,
     env: await buildSessionEnv(deps),
     stderr: (data: string) => {
       deps.logger?.debug(`claude-code[${options.id}] ${data}`)
@@ -1092,9 +1244,9 @@ export async function buildSessionEnv(
 }
 
 /**
- * The fail-closed permission callback used until Phase 4 wires the dsh ask
- * channel. It denies with an explanation rather than throwing: a rejected
- * `canUseTool` promise hangs the CLI forever (gotcha 9).
+ * The fail-closed permission callback for a session with neither an injected
+ * `canUseTool` nor an ask channel. It denies with an explanation rather than
+ * throwing: a rejected `canUseTool` promise hangs the CLI forever (gotcha 9).
  * @param toolName - the tool the model wants to run.
  * @param _input - the tool input (unused).
  * @param _request - the request context (unused).
