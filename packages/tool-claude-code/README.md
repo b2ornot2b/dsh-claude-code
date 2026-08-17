@@ -6,7 +6,7 @@ This package is `private: true` and keeps the `@deepseek-ai/dsh-*` name for futu
 
 The plugin stays pending until both injected services exist (`inject: ['tools', 'claudeCode']`): a `ToolRuntime` (`@deepseek-ai/dsh-tools`) and the Claude Code seam. It never imports `@anthropic-ai/claude-agent-sdk` directly — only `packages/claude-code` may.
 
-**Phase 1 status: every tool body is a typed stub.** The schemas below (parameters and output) are the lasting contract — `execute()` always rejects with `ClaudeCodeError` (`code: 'NOT_IMPLEMENTED'`) naming Phase 5, the phase that wires a real Claude Code session actor behind these calls. Nothing here fakes a session, a status, or a result.
+**Status as of Phase 2: every tool body is still a typed stub.** The schemas below (parameters and output) are the lasting contract — `execute()` always rejects with `ClaudeCodeError` (`code: 'NOT_IMPLEMENTED'`) naming Phase 5, the phase that wires a real Claude Code session actor behind these calls. Nothing here fakes a session, a status, or a result.
 
 ## Tools
 
@@ -52,7 +52,7 @@ Close a session: settle its pending asks as denied, then close the underlying SD
 
 #### What the model sees
 
-The generated `claude_code_open` schema (six optional fields beyond the required `cwd`) plus, on a successful call in a later phase, either a session line (`session <id> (<status>)`) or a background-job acknowledgement (`started background job <jobId> (session <ccSessionId>)`). In Phase 1 every call instead returns `Error: claude_code_open is not implemented until Phase 5 …`.
+The generated `claude_code_open` schema (six optional fields beyond the required `cwd`) plus, on a successful call in a later phase, either a session line (`session <id> (<status>)`) or a background-job acknowledgement (`started background job <jobId> (session <ccSessionId>)`). Until Phase 5 every call instead returns `Error: claude_code_open is not implemented until Phase 5 …` — note that the seam behind it IS live as of Phase 2, so a caller that needs a session today drives `ctx.claudeCode` directly.
 
 #### Token effect
 

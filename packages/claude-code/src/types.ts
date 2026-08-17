@@ -125,6 +125,19 @@ export type CcSessionStatus = 'starting' | 'running' | 'idle' | 'closed'
 /** Every {@link CcSessionStatus}. */
 export const CC_SESSION_STATUSES: readonly CcSessionStatus[] = ['starting', 'running', 'idle', 'closed']
 
+/**
+ * The diagnostics sink a session writes subprocess stderr and lifecycle notes
+ * to. Structural on purpose: cordis's `ctx.logger` satisfies it, and so does a
+ * two-line test double — the seam never needs the rest of a logger's surface.
+ */
+export interface CcLogger {
+  /**
+   * Record a diagnostic line.
+   * @param message - the line.
+   */
+  debug(message: string): void
+}
+
 /** Context-window occupancy of a live Claude Code session, when it reports one. */
 export interface CcContextUsage {
   /** Tokens currently occupied by the session's live context. */
@@ -210,10 +223,27 @@ export type CcErrorCode =
   | 'UNKNOWN_SESSION'
   /** `limits.maxConcurrentSessions` would be exceeded. */
   | 'SESSION_LIMIT'
+  /**
+   * A plain resume targets a session that is STILL OPEN in this context. It
+   * would continue under the same id (the SDK forbids a fresh one without
+   * `fork`), overwriting the live registry entry and leaving two queries on one
+   * transcript. Close it first, or fork it.
+   */
+  | 'SESSION_EXISTS'
   /** The session id is not a bare UUID and cannot be handed to the SDK. */
   | 'INVALID_SESSION_ID'
   /** Configuration is internally inconsistent (e.g. api-key auth with no credential ref). */
   | 'INVALID_CONFIG'
+  /** The session is closed (or closing): sends, interrupts and waiters are refused. */
+  | 'SESSION_CLOSED'
+  /** `cwd` is missing, relative, or not an existing directory — caught BEFORE any subprocess spawns. */
+  | 'INVALID_CWD'
+  /** A composition-level question was asked with no live session to answer it (e.g. `accountInfo()`). */
+  | 'NO_LIVE_SESSION'
+  /** A bounded wait elapsed (e.g. `waitForResult(timeoutMs)`); the session is untouched and still live. */
+  | 'TIMEOUT'
+  /** The Claude Agent SDK failed to start or drive the session; `cause` carries the original error. */
+  | 'BACKEND_ERROR'
 
 /** Error taxonomy for the Claude Code seam. */
 export class ClaudeCodeError extends HarnessError {

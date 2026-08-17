@@ -13,7 +13,7 @@ against. Every other phase can be built and tested without it.
 > `@deepseek-ai/dsh-*` name so that upstreaming into the harness monorepo is a mechanical move
 > rather than a rename — we do not own the `@deepseek-ai` npm scope and cannot publish into it.
 
-**Phase status: Phase 1 (scaffold).** `apply()` validates its (currently field-less)
+**Status as of Phase 2: still the Phase 1 scaffold** (the adapter itself lands in Phase 6). `apply()` validates its (currently field-less)
 configuration and logs a mount marker with clean teardown. It registers **nothing** with
 `ctx.agents` — no `Agent`, no factory call, nothing a listener could observe. The exported
 `createClaudeCodeAgent()` has its Phase 6 signature and always rejects with `ClaudeCodeError`
@@ -147,7 +147,7 @@ required for the mapping to work).
 
 ## Model Experience
 
-None, directly: this Phase 1 scaffold registers no `Agent`, no tool schema, no system-prompt
+None, directly: this scaffold registers no `Agent`, no tool schema, no system-prompt
 contribution, and dispatches no event — there is nothing here yet for a model to see. Once
 Phase 6 lands, the model-visible surface is entirely Claude Code's own: its system prompt, its
 tool set, its transcript. This package's job is routing and identity, not content it originates.
@@ -160,13 +160,13 @@ cache over its own transcript; this package neither feeds nor invalidates it.)
 
 ## Known Limitations and Deferred Work
 
-- **`createClaudeCodeAgent()` is unimplemented (Phase 1)** — always rejects with
+- **`createClaudeCodeAgent()` is unimplemented (lands in Phase 6)** — always rejects with
   `ClaudeCodeError` code `NOT_IMPLEMENTED` and a message naming Phase 6. Its parameter and
   return types (`CcAgentOptions` → `Promise<Agent>`) are final; only the body is a stub.
 - **Nothing is registered with `ctx.agents`** — mounting this plugin has no observable effect
   beyond the logged mount/unmount marker. `agent/created`, `agent/disposed`, and every other
   `dsh-agent` event never fire because of this package until Phase 6.
-- **§7.1's inert waterfalls have no workaround in Phase 1** — because nothing is registered yet,
+- **§7.1's inert waterfalls have no workaround yet** — because nothing is registered yet,
   the question is moot for now; it becomes live the moment Phase 6 publishes the first agent,
   and the substitutes table above is the contract that phase must satisfy.
 - **Turn framing is undecided in code, only in the plan** — the spec review's Phase 6 note says

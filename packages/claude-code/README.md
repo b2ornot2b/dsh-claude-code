@@ -16,9 +16,33 @@ Consumers:
 > (`packages/claude-code/claude-code/`) is a mechanical move rather than a rename — we do not
 > own the `@deepseek-ai` npm scope and cannot publish into it.
 
-**Phase status: Phase 1 (scaffold).** The service mounts, validates config, and answers
-`get()` / `list()` against an empty registry. `open()` and `accountInfo()` throw
-`ClaudeCodeError` with code `NOT_IMPLEMENTED`; the session actor lands in Phase 2.
+**Phase status: Phase 2 (session actor).** `open()` is real: it mints the shared dsh/CC id,
+resolves the SDK options, spawns (or adopts a pre-warmed) Claude Code subprocess, awaits the
+initialize handshake and registers the session. `send()` / `interrupt()` / `waitForResult()` /
+`onMessage()` live on the `CcSession` actor, reachable through `ctx.claudeCode.session(id)`.
+
+Three things are still stubs, by design and with the phase named in the code: nothing is
+mirrored into the dsh session log until **Phase 3**, `canUseTool` fails CLOSED (every tool
+call is denied with an explanation) until **Phase 4** wires the dsh ask channel, and the
+model-facing `claude_code_*` tools in `@deepseek-ai/dsh-tool-claude-code` are still
+registered-but-inert scaffolds until **Phase 5**.
+
+### Running the tests
+
+```sh
+pnpm test           # offline: build + unit + composition. No subprocess, no network.
+pnpm run test:live  # opt-in: DSH_CC_LIVE=1, real subprocesses, real claude.ai subscription
+```
+
+`pnpm test` also boots the repo's real `tests/composition/cordis.yml` through the cordis
+Loader, which imports each row's **built** `lib/index.js` — that is what proves the
+`exports` map, the `inject` list, the `Config` schema and the SDK-free `lib/types` for real,
+rather than against TypeScript sources.
+
+The live suite (`tests/live/`) drives nine real sessions on
+`claude-haiku-4-5-20251001` with one-sentence prompts and isolated tmp working
+directories, and asserts on a `pgrep` delta that no subprocess outlives a test. It is
+gated with `describe.skipIf` so the default suites stay offline-green.
 
 ---
 
@@ -33,14 +57,15 @@ assumes it can will be silently wrong the first time CC auto-compacts.
 
 ## Service API (`ctx.claudeCode`)
 
-| Member | Phase 1 behavior | Final behavior |
-|---|---|---|
-| `open(options)` | throws `ClaudeCodeError` code `NOT_IMPLEMENTED` | opens/resumes/forks a live session and returns its snapshot |
-| `get(id)` | reads the (empty) registry; `undefined` when unknown | live snapshot of a registered session |
-| `list()` | `[]` | every session registered in this context |
-| `close(id)` | `false` when unknown; disposes a registered record otherwise | settles pending asks as deny, then closes the SDK query |
-| `accountInfo()` | throws `ClaudeCodeError` code `NOT_IMPLEMENTED` | the SDK's `accountInfo()` projection, so a user can confirm which auth is live |
-| `config` | the schemastery-validated configuration | unchanged |
+| Member | Phase 2 behavior |
+|---|---|
+| `open(options)` | opens (or resumes, or forks) a live session and returns its snapshot. Refuses a non-absolute or missing `cwd` with `INVALID_CWD` **before** anything spawns, and a session past `limits.maxConcurrentSessions` with `SESSION_LIMIT` |
+| `get(id)` | the live snapshot of a registered session (status, model, pending asks), `undefined` when unknown |
+| `list()` | every live session, in open order; a fresh array per call |
+| `close(id)` | settles pending asks, aborts, closes the SDK query, ends the input stream, drops the registry entry |
+| `session(id)` | the `CcSession` actor — `send` / `interrupt` / `waitForResult` / `onMessage`. Values (snapshots) cross tool boundaries; this handle does not |
+| `accountInfo()` | the account from the first live session's cached initialize response. Throws `NO_LIVE_SESSION` when nothing is open: it never spawns a subprocess of its own |
+| `config` | the schemastery-validated configuration |
 
 All session lifecycle is registered through `ctx.effect()`, so disposing the plugin fiber
 (HMR, plugin unload, process teardown) closes every session this service opened.
@@ -181,10 +206,37 @@ over its own transcript, which the dsh mirror neither feeds nor invalidates.
 
 ## Known Limitations and Deferred Work
 
-- **`open()` and `accountInfo()` are unimplemented (Phase 1)** — both throw `ClaudeCodeError`
-  with code `NOT_IMPLEMENTED` and a message naming the phase that lands them. `get()`,
-  `list()`, and `close()` operate against an always-empty registry until Phase 2 registers
-  real sessions, so a consumer written now must treat "no such session" as the normal answer.
+- **Every tool call is denied until Phase 4** — the session's `canUseTool` is a fail-closed
+  stub that answers `deny` with an explanation naming the phase. A live session can read
+  nothing and write nothing until the dsh ask channel is wired; that is deliberate (a
+  silently-allowing default is the one failure mode that cannot be undone).
+- **Nothing is mirrored into the dsh session log yet (Phase 3)** — `onMessage()` is the
+  attachment point and every envelope already carries the metadata the mirror needs
+  (`interruptArtifact`, `reinit`), but no `SessionEvent` is appended anywhere.
+- **`accountInfo()` needs a live session** — the account arrives with a session's initialize
+  handshake, and this call deliberately never opens one; with an empty registry it throws
+  `NO_LIVE_SESSION`.
+- **Pre-warming starts helping from the SECOND open** — `startup()` freezes `cwd` (and every
+  other option), so the first open of a given shape is always cold and the pool warms
+  afterwards for the next one. A changed shape discards the held subprocess.
+- **No model-facing tools yet (Phase 5)** — `@deepseek-ai/dsh-tool-claude-code` registers all
+  six `claude_code_*` schemas so the composition is complete and typed, but their bodies do
+  not drive a session yet. Drive sessions through `ctx.claudeCode` directly until then.
+- **A resumed session keeps its id; a live one cannot be resumed** — SDK 0.3.233 refuses a
+  caller-supplied `sessionId` alongside `resume` unless `fork` is set, so a plain resume
+  continues under the id it resumed. Resuming a session that is still open in this context is
+  refused with `SESSION_EXISTS` (two queries on one transcript); close it, or fork it.
+- **An interrupted turn reports as an interrupted turn** — `interrupt()` makes the running
+  turn end with an `error_during_execution` result. It is flagged `meta.interruptedTurn` so a
+  mirror can render it as *cancelled*, but unlike a steer's artifact it is NOT suppressed: with
+  nothing queued behind it, it is the only signal the turn ended, and withholding it would
+  strand every `waitForResult()` until its timeout.
+- **Steering re-pays the aborted turn's tokens** — `send(..., { mode: 'steer' })` is
+  `priority: 'now'`, which aborts the running turn and refolds both instructions into one
+  fresh turn (spike 2). It is not token-level steering, and the aborted turn's output is paid
+  for twice.
+- **Content blocks are text-only** — a send carries a string; images and tool results are not
+  expressible through `CcSession.send()` yet.
 - **The session log is a mirror** — replay, fork-by-seed-replay, and any `deriveMessages()`
   driven request are invalid for CC-backed sessions. There is no plan to make them valid;
   CC owns its transcript.
@@ -196,13 +248,11 @@ over its own transcript, which the dsh mirror neither feeds nor invalidates.
   takes no arguments). Queued-message cancellation is therefore emulated at our layer by
   treating the receipt's `still_queued` uuids as cancelled and never redelivering them.
   Tracked for adoption when the SDK exposes the native call.
-- **No real-Loader composition test yet** — `tests/exports.spec.ts` emulates
-  `Loader.unwrapExports` verbatim and mounts the resulting namespace, which
-  catches the post-mortem 0001 regression class offline. A genuine
-  `cordis.yml` + Loader boot has to import the built `lib/index.js` natively,
-  which under vitest's transform pipeline would load a second copy of cordis and
-  break service resolution; it lands with Phase 2 alongside a `lib`-mode
-  subprocess launcher.
+- **Pre-warming is skipped for resumed and forked opens** — a warm handle is always a PLAIN
+  session, because `warmFingerprint` ignores `resume`/`forkSession` (it must, so the pool's
+  pre-minted id can be adopted) and a handle warmed with either baked in would be
+  indistinguishable from a fresh one. Resuming still works; it just never comes from the pool
+  and never seeds it.
 - **Config `null` means "unset"** — the spec renders unset values as YAML `null`
   (`model: null`, `ask.timeoutMs: null`); the schema models them as absent optional fields.
   Both an explicit `null` and an omitted key resolve to the documented default behavior.
