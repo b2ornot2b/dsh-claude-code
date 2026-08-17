@@ -52,6 +52,17 @@ export type {
 export { createInputStream } from './input-stream.ts'
 export type { CcInputStream, CcUserMessageInit } from './input-stream.ts'
 
+export { attachMirror, CC_COMPACT_EVENT, CcMirror, markEventIgnorable } from './mirror.ts'
+export type {
+  CcCompactEventData,
+  CcCompactionMode,
+  CcMirrorHandle,
+  CcMirrorIgnoreCounts,
+  CcMirrorOptions,
+  CcMirrorSource,
+  CcMirrorStats,
+} from './mirror.ts'
+
 export { WarmPool, warmFingerprint } from './prewarm.ts'
 export type { CcWarmLease, WarmPoolDeps } from './prewarm.ts'
 
@@ -65,8 +76,10 @@ export type {
   CcOutboxEntry,
   CcOutboxState,
   CcQueryOptionDeps,
+  CcSendListener,
   CcSendMode,
   CcSendOptions,
+  CcSendRecord,
   CcSessionDeps,
   CcSessionOptions,
 } from './session.ts'
@@ -91,6 +104,7 @@ export type {
   CcContextUsage,
   CcErrorCode,
   CcLogger,
+  CcMirrorAttachment,
   CcOpenOptions,
   CcPermissionMode,
   CcSessionId,

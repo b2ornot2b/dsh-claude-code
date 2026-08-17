@@ -12,6 +12,9 @@ import { randomUUID } from 'node:crypto'
 import type { PermissionMode, SettingSource } from '@anthropic-ai/claude-agent-sdk'
 import { HarnessError } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
+import type { Session as DshSession } from '@deepseek-ai/dsh-session'
+
+import type { CcMirrorHandle, CcMirrorOptions } from './mirror.ts'
 
 /**
  * A Claude Code session id. It IS a dsh {@link SessionId} — the same value is
@@ -146,6 +149,23 @@ export interface CcContextUsage {
   readonly maxTokens?: number
 }
 
+/**
+ * Mirror one session into a dsh session log from the moment it opens.
+ *
+ * Attaching at open time (rather than after {@link ClaudeCode.open} returns) is
+ * what captures the FIRST prompt: `open({ prompt })` sends it synchronously, and
+ * a mirror attached afterwards would have missed the `turn/start` +
+ * `user/message` that prompt produces.
+ *
+ * `@deepseek-ai/dsh-session` stays OPTIONAL for pure-SDK consumers: it is a peer
+ * dependency used for types here, and a consumer that never passes a session
+ * never constructs one.
+ */
+export interface CcMirrorAttachment extends CcMirrorOptions {
+  /** The dsh session to mirror into. It may already hold events (a resumed log). */
+  readonly session: DshSession
+}
+
 /** How to open (or resume, or fork) a Claude Code session. */
 export interface CcOpenOptions {
   /** Absolute working directory the session runs in. Required. */
@@ -173,6 +193,12 @@ export interface CcOpenOptions {
    * of synchronously. Consumers, not this seam, own the job registration.
    */
   readonly background?: boolean
+  /**
+   * Mirror this session into a dsh session log (§5). Attached BEFORE the first
+   * prompt is sent, so the opening turn is framed. The attachment is disposed
+   * automatically when the session closes.
+   */
+  readonly mirror?: CcMirrorAttachment
 }
 
 /**
@@ -289,6 +315,22 @@ export interface ClaudeCode {
    * @returns true when a session was closed, false when the id was unknown.
    */
   close(id: CcSessionId): Promise<boolean>
+  /**
+   * Mirror an already-open session into a dsh session log (§5).
+   *
+   * Prefer `open({ mirror })` when the session is being opened with a prompt:
+   * that prompt is sent synchronously inside `open()`, so a mirror attached
+   * afterwards misses the turn it starts. This entry point exists for a session
+   * opened idle, or for attaching a second log (a UI projection) later.
+   *
+   * @param id - the shared dsh/CC session id.
+   * @param session - the dsh session to append to.
+   * @param options - subagent policy, compaction policy, provider name, logger.
+   * @returns the mirror and its unsubscribe function; disposed automatically
+   *   when the Claude Code session closes.
+   * @throws {ClaudeCodeError} code `UNKNOWN_SESSION` when the id is not registered.
+   */
+  attachMirror(id: CcSessionId, session: DshSession, options?: CcMirrorOptions): CcMirrorHandle
   /**
    * Which authentication is live for this composition.
    * @returns the account projection.

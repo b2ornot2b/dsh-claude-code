@@ -32,6 +32,20 @@ own `process.env` write) and the two the review of those fixes surfaced (a warm
 subprocess could be seeded with `resume`/`forkSession` baked in; a plain resume
 of a live session overwrote its registry entry).
 
+**Updated by Phase 3 (the mirror).** §4.4c is the mirror's whole surface —
+`CcMirror`, `attachMirror`, `CcMirrorSource`, the `claude-code/compact` custom
+event and `markEventIgnorable` — plus the new `CcSession.onSend` seam (§4.4b) it
+reads user prompts from. Three defects were found by replaying real traffic
+rather than hand-written shapes, and all three are fixed and documented here:
+a `steer`'s aborted model call was flushed as a spurious near-empty
+`assistant/message` (Stage 2, from a recorded fixture); a turn killed mid-block
+dropped the text it had already streamed and wrote an EMPTY assistant message
+instead (Stage 3); and a session that died mid-turn left a dangling `turn/start`
+that made the log permanently unappendable (Stage 3, now closed by
+`CcMirror.finalize()`). A `followup` queued behind a running turn is also
+recorded in the turn that RUNS it rather than the one that was open, so the
+mirrored transcript reads in execution order.
+
 ---
 
 ## 1. Hard rules (non-negotiable, each one is a real production bug)
@@ -210,11 +224,12 @@ packages on deliberately different planes:
 
 ## 4. The seam's exact export surface
 
-`import { … } from '@deepseek-ai/dsh-claude-code'`. **Twenty-four** runtime
+`import { … } from '@deepseek-ai/dsh-claude-code'`. **Twenty-eight** runtime
 exports (pinned by `packages/claude-code/tests/exports.spec.ts` — Phase 2 added
 `CcSession`, `WarmPool`, `realBackend`, `createInputStream`, `resolveQueryOptions`,
-`buildSessionEnv`, `warmFingerprint`) plus the types below. Nothing else exists;
-nothing else will be added without updating this document.
+`buildSessionEnv`, `warmFingerprint`; Phase 3 added `CcMirror`, `attachMirror`,
+`CC_COMPACT_EVENT`, `markEventIgnorable`) plus the types below. Nothing else
+exists; nothing else will be added without updating this document.
 
 **No export references a Claude Agent SDK type.** `src/backend.ts` re-states, in
 this seam's own vocabulary, exactly the SDK shapes we use, and the real backend
@@ -234,10 +249,12 @@ class ClaudeCodeService extends Service implements ClaudeCode {
   list(): readonly CcSessionSnapshot[]
   close(id: CcSessionId): Promise<boolean>
   accountInfo(): Promise<CcAccountInfo>
+  // Phase 3:
+  attachMirror(id: CcSessionId, session: Session, options?: CcMirrorOptions): CcMirrorHandle
 }
 
 /** The capability, for typing against the seam rather than the class. */
-interface ClaudeCode { /* the five methods above, identical signatures */ }
+interface ClaudeCode { /* the six methods above, identical signatures */ }
 ```
 
 Context augmentation (already declared by the seam):
@@ -263,6 +280,7 @@ gone; `session(id)` is new):
 | `close(id)` | `true` when a session was closed, `false` for an unknown id; idempotent |
 | `session(id)` | the `CcSession` actor, or `undefined`. **A handle, not a value** — never put it in a tool result, never identity-compare it across a service access |
 | `accountInfo()` | the first live session's cached account; rejects `NO_LIVE_SESSION` when nothing is open (it never spawns a session to answer) |
+| `attachMirror(id, session, opts?)` | (Phase 3) mirrors a live session into a dsh session log; throws `UNKNOWN_SESSION` for an unregistered id. When the CC session closes the mirror is FINALIZED (a turn left open by a mid-turn death is closed as `aborted`/`disposed`) and then detached |
 | `config` | fully resolved; safe to read |
 
 A consumer written against Phase 1 still compiles: nothing was removed. What
@@ -379,10 +397,18 @@ class CcSession {
   waitForResult(timeoutMs?: number): Promise<CcMessageEnvelope>
   interrupt(options?: CcInterruptOptions): Promise<CcInterruptOutcome>
   onMessage(listener: CcMessageListener): () => void
+  onSend(listener: CcSendListener): () => void   // Phase 3 — outgoing messages
   onClose(listener: () => void): () => void
   close(): Promise<void>               // idempotent
 }
 ```
+
+`onSend` exists because outgoing messages **never come back over `onMessage`**:
+the CLI does not echo the prompt it was given, so the send side is the only place
+a mirror can learn about a user prompt. Its record is
+`{ sessionId, uuid, mode, content, sentAt }`, fanned out synchronously inside
+`send()` (before the status machine moves), with listener failures isolated
+exactly like `onMessage`'s.
 
 **Send modes** (`{ mode }`, default `'followup'`), each returning the stamped uuid:
 
@@ -457,6 +483,136 @@ Two rules keep that fingerprint honest, both learned the hard way (§5a):
   never served from a subprocess frozen with the old one. The rest of `env` is
   ambient noise outside this seam's control (the SDK itself writes
   `CLAUDE_AGENT_SDK_VERSION` into `process.env` on its first real call).
+
+### 4.4c The mirror (Phase 3)
+
+```ts
+class CcMirror {
+  constructor(session: Session, options?: CcMirrorOptions)   // dsh Session
+  get hasOpenTurn(): boolean
+  get openTurn(): number | undefined
+  get openStep(): number | undefined
+  get callIds(): ReadonlyMap<string, CallId>     // cc tool_use id -> dsh CallId
+  callIdFor(toolUseId: string): CallId           // stable; mints on first ask
+  toolUseIdFor(callId: CallId): string | undefined
+  get stats(): CcMirrorStats                     // { appended, ignored, checksumMismatches }
+  observe(envelope: CcMessageEnvelope): void     // one SDK message
+  recordSend(send: CcSendRecord): void           // one outgoing message
+  finalize(): void                               // close a turn the dead session will never finish
+}
+
+interface CcMirrorOptions {
+  forwardSubagentText?: boolean            // default false
+  compaction?: 'append' | 'skip'           // default 'append'
+  provider?: string                        // default 'claude-code'
+  logger?: CcLogger
+}
+
+function attachMirror(source: CcMirrorSource, session: Session, options?: CcMirrorOptions): CcMirrorHandle
+const CC_COMPACT_EVENT: 'claude-code/compact'
+function markEventIgnorable<T extends SessionEvent>(event: T): T
+```
+
+**Two attachment seams**, and the difference matters:
+
+| seam | when |
+|---|---|
+| `open({ …, mirror: { session, forwardSubagentText?, compaction?, provider?, logger? } })` | **whenever a prompt is passed to `open()`** — the prompt is sent synchronously inside `open()`, so a mirror attached afterwards misses the turn it starts |
+| `ctx.claudeCode.attachMirror(id, session, opts?)` | a session opened idle, or a second log attached later |
+
+Both bind the mirror's lifetime to the session: when the Claude Code session
+closes the service calls `mirror.finalize()` and then detaches. `finalize()` is
+what keeps the log usable — a session that dies MID-TURN never emits the result
+that would have closed the dsh turn, and a log with a dangling `turn/start` can
+never be appended to again (dsh refuses a second open turn). It closes the turn
+as `{ kind: 'aborted', reason: { kind: 'disposed' } }`, flushes any still-deferred
+prompt, and appends nothing at all when no turn is open. `handle.dispose()` on
+its own still appends nothing, by design.
+`@deepseek-ai/dsh-session` stays **optional** for pure-SDK consumers — it is a
+peer dependency used for types, and a composition that never passes a dsh session
+never constructs one.
+
+**The mirror is not a source of truth** (spec §5.1) and it is **write-only into
+dsh**: its whole view of a Claude Code session is `CcMirrorSource`
+(`onMessage` + `onSend`), so it cannot send, interrupt, close, or register a
+cordis waterfall listener. `packages/claude-code/tests/mirror.spec.ts` asserts
+that structurally.
+
+**Projection**, in event terms:
+
+| SDK signal | dsh events |
+|---|---|
+| send (`followup`, no turn open) | `turn/start`, then `user/message` (`source: { kind: 'plugin', plugin: 'dsh-claude-code' }`) |
+| send (`followup`, turn already open) | **deferred** to the `turn/start` of the turn that runs it — CC queues it (spike 2), and recording it inside the running turn would put the prompt *before* the answer to the previous one in `deriveMessages()` |
+| send (`steer`) | `turn/start` if none open, then `user/message` **in the open turn** — a steer refolds into it |
+| send (`inject`) | `user/message` only, with `form: 'notice'` + bounded `summary`; **starts no turn** |
+| `stream_event` `message_start` | closes the previous step (one dsh step = one model call) |
+| `content_block_start/delta/stop` | `assistant/chunk` with dsh `StreamChunk` payloads: `block-start {blockType:'text'\|'reasoning'\|'tool-call'}`, `text-delta`, `reasoning-delta` (thinking), `tool-call-delta`, `block-end` |
+| `message_delta` / `message_stop` | `assistant/chunk` `usage`, then the terminal `finish` |
+| end of a model call | `assistant/message` assembled from the ACCUMULATED chunks (`sourceEventSeqs` = those chunk seqs), then one `tool/call` per tool-call block |
+| `tool_result` block (user-role message) | `tool/result`, inside the step that requested it |
+| `TodoWrite` call | `todo/write` when the shape maps trivially (`activeForm` is dropped); skipped otherwise |
+| `SDKResultMessage` | `step/end` + `turn/end` (`completed`, `aborted`, `max-tokens`, or `error` with code `CLAUDE_CODE_<SUBTYPE>`) |
+| `SDKCompactBoundaryMessage` | `claude-code/compact` (see below) |
+| `system/init` (incl. re-inits) | nothing — the model is re-cached, **no framing events** |
+| anything else (~38-variant union) | counted in `stats.ignored`, never thrown |
+
+Deliberate omissions: **no `request/header`** is synthesized (the CC subprocess
+never discloses the request config it used, and a wrong header poisons
+`foldRequestHeader()` for every later reader), and **user-message TEXT arriving
+over `onMessage` is ignored** (prompts come from the send side; mirroring an echo
+would duplicate them). User-role messages contribute their `tool_result` blocks
+only.
+
+**Cancellation** (§5.4): `meta.interruptArtifact` results are **suppressed
+entirely** — a steer refolds, so the turn is not over — and the partial model
+call they aborted is **discarded**, because live traffic shows the refold starts
+a brand-new `message_start` rather than continuing the aborted stream.
+`meta.interruptedTurn` results close the turn as
+`{ kind: 'aborted', reason: { kind: 'user' } }`, never as an error, and the model
+call they killed still contributes what it had already streamed: text and
+reasoning blocks left open are salvaged into the `assistant/message` (they are
+already on the surface as chunks, so dropping them would contradict it), while a
+`tool_use` block whose arguments were cut off is **not** — its JSON is truncated
+and no such call was ever run. A call that produced nothing at all gets **no
+`assistant/message`**: an empty-content assistant message is not a valid provider
+message, and every reader of `deriveMessages()` would have to special-case it.
+
+**Subagents**: by default only `tool_use`/`tool_result` from parented messages
+are mirrored (the call ids Phase 4 needs). `forwardSubagentText: true` adds the
+nested text. Known loss: `parent_tool_use_id` fits **only** on `tool/result`
+(`data.meta.parentToolUseId`) — `assistant/chunk` carries dsh's closed
+`StreamChunk` union and `tool/call` has no free field, so nested text and nested
+calls appear inline in the parent's step.
+
+**The `ignorable` gap (D9), stated exactly.** A custom event must (1) be
+declaration-merged into `SessionEventMap` — done, against
+`@deepseek-ai/dsh-session/types`; (2) carry a lossless-JSON payload — enforced by
+`Session.append`; and (3) carry `ignorable: true` on the **envelope**, or a
+persistence read path whose build does not know the type refuses the whole log
+(`known-event-types.ts:8-18`). **Point 3 is impossible through rc.7's public
+API**: `Session.append()` builds and deep-freezes the envelope itself and accepts
+no marker. Consequences and mitigations, both shipped:
+
+- a live-appended `claude-code/compact` is a *required* event, so a log holding
+  one is refused by a stock harness build;
+- `compaction: 'skip'` omits the event for logs that must stay portable;
+- `markEventIgnorable(event)` stamps the marker at the seed/restore boundary —
+  the one place envelopes are caller-supplied
+  (`SessionStore.prepare(id, { seed, meta, seedSource: 'persistence' })`).
+
+The real fix is upstream (`append(type, data, { ignorable: true })`).
+
+**Framing approximation** (§5.2): one CC turn is one dsh turn; each model call
+inside it is one dsh step. Step numbering continues across a resumed log — the
+mirror folds the existing events at construction — and a turn CC starts on its
+own (auto-resume, a scheduled trigger) is opened defensively so no step, chunk or
+tool call is ever appended outside a turn. A step opens LAZILY, on the first
+chunk, so a model call that is killed before it streams anything leaves no empty
+step behind. A `tool_result` whose `tool/call` is no longer pending in the open
+step (it arrived after the turn closed, or the mirror never saw the call) is
+counted in `stats.ignored['tool-result:orphan']` and dropped — dsh's own
+invariants reject it anywhere else.
 
 ### 4.5 Configuration
 

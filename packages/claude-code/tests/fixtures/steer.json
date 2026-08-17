@@ -1,0 +1,1345 @@
+{
+  "scenario": "steer",
+  "description": "A steer mid-turn: the aborted turn's error_during_execution artifact (suppressed by the mirror), then the refolded turn's real result.",
+  "model": "claude-haiku-4-5-20251001",
+  "entries": [
+    {
+      "kind": "send",
+      "send": {
+        "uuid": "uuid-scrubbed-0001",
+        "mode": "followup",
+        "content": "Count from 1 to 30, one number per line, then say DONE.",
+        "sentAt": 0
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "command_lifecycle",
+          "command_uuid": "uuid-scrubbed-0001",
+          "state": "queued",
+          "uuid": "uuid-scrubbed-0002",
+          "session_id": "uuid-scrubbed-0003"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "command_lifecycle",
+          "command_uuid": "uuid-scrubbed-0001",
+          "state": "started",
+          "uuid": "uuid-scrubbed-0004",
+          "session_id": "uuid-scrubbed-0003"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "system",
+          "subtype": "init",
+          "cwd": "/scrubbed/cwd",
+          "session_id": "uuid-scrubbed-0003",
+          "tools": [
+            "Task",
+            "AskUserQuestion",
+            "Bash",
+            "CronCreate",
+            "CronDelete",
+            "CronList",
+            "DesignSync",
+            "Edit",
+            "EnterPlanMode",
+            "EnterWorktree",
+            "ExitPlanMode",
+            "ExitWorktree",
+            "ListAgents",
+            "Monitor",
+            "NotebookEdit",
+            "PushNotification",
+            "Read",
+            "RemoteTrigger",
+            "ReportFindings",
+            "ScheduleWakeup",
+            "SendMessage",
+            "Skill",
+            "TaskCreate",
+            "TaskGet",
+            "TaskList",
+            "TaskOutput",
+            "TaskStop",
+            "TaskUpdate",
+            "ToolSearch",
+            "WebFetch",
+            "WebSearch",
+            "Workflow",
+            "Write"
+          ],
+          "mcp_servers": [],
+          "model": "claude-haiku-4-5-20251001",
+          "permissionMode": "default",
+          "slash_commands": [
+            "deep-research",
+            "design-sync",
+            "dataviz",
+            "update-config",
+            "verify",
+            "debug",
+            "code-review",
+            "simplify",
+            "batch",
+            "fewer-permission-prompts",
+            "doctor",
+            "loop",
+            "schedule",
+            "claude-api",
+            "run",
+            "run-skill-generator",
+            "agents",
+            "auto-mode-setup",
+            "autocompact",
+            "clear",
+            "color",
+            "compact",
+            "config",
+            "context",
+            "effort",
+            "fast",
+            "heapdump",
+            "init",
+            "mcp",
+            "import",
+            "model",
+            "__remote-workflow",
+            "workflow-launch-exec",
+            "reload-skills",
+            "rename",
+            "ultrareview",
+            "security-review",
+            "usage-credits",
+            "extra-usage",
+            "usage",
+            "insights",
+            "recap",
+            "goal",
+            "design",
+            "design-consent",
+            "design-revoke",
+            "list-agents",
+            "team-onboarding"
+          ],
+          "terminal_slash_commands": [
+            "doctor",
+            "color"
+          ],
+          "apiKeySource": "none",
+          "claude_code_version": "2.1.233",
+          "output_style": "default",
+          "agents": [
+            "claude",
+            "Explore",
+            "general-purpose",
+            "Plan",
+            "statusline-setup"
+          ],
+          "skills": [
+            "deep-research",
+            "design-sync",
+            "dataviz",
+            "update-config",
+            "verify",
+            "debug",
+            "code-review",
+            "simplify",
+            "batch",
+            "fewer-permission-prompts",
+            "doctor",
+            "loop",
+            "schedule",
+            "claude-api",
+            "run",
+            "run-skill-generator"
+          ],
+          "plugins": [],
+          "capabilities": [
+            "interrupt_receipt_v1",
+            "interrupt_cancel_queued_v1",
+            "msg-scrubbed-0001"
+          ],
+          "analytics_disabled": false,
+          "product_feedback_disabled": false,
+          "uuid": "uuid-scrubbed-0005",
+          "memory_paths": {
+            "auto": "/scrubbed/home/.claude/projects/scrubbed-project-slug/memory/"
+          },
+          "messaging_socket_path": "/tmp/cc-socks/67798.sock",
+          "fast_mode_state": "off",
+          "fast_mode_disabled_reason": "sdk_opt_in_required"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "system",
+          "subtype": "status",
+          "status": "requesting",
+          "uuid": "uuid-scrubbed-0006",
+          "session_id": "uuid-scrubbed-0003"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "message_start",
+            "message": {
+              "model": "claude-haiku-4-5-20251001",
+              "id": "msg-scrubbed-0002",
+              "type": "message",
+              "role": "assistant",
+              "content": [],
+              "stop_reason": null,
+              "stop_sequence": null,
+              "stop_details": null,
+              "usage": {
+                "input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "cache_creation": {
+                  "ephemeral_5m_input_tokens": 0,
+                  "ephemeral_1h_input_tokens": 0
+                },
+                "output_tokens": 0,
+                "service_tier": "standard",
+                "inference_geo": "not_available"
+              },
+              "diagnostics": null
+            }
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0007",
+          "ttft_ms": 0
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "send",
+      "send": {
+        "uuid": "uuid-scrubbed-0008",
+        "mode": "steer",
+        "content": "Also say BANANA at the end.",
+        "sentAt": 0
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+              "type": "thinking",
+              "thinking": "",
+              "signature": ""
+            }
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0009"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "system",
+          "subtype": "thinking_tokens",
+          "estimated_tokens": 5,
+          "estimated_tokens_delta": 5,
+          "uuid": "uuid-scrubbed-0010",
+          "session_id": "uuid-scrubbed-0003"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+              "type": "thinking_delta",
+              "thinking": "The user is asking",
+              "estimated_tokens": null
+            }
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0011"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "command_lifecycle",
+          "command_uuid": "uuid-scrubbed-0008",
+          "state": "queued",
+          "uuid": "uuid-scrubbed-0012",
+          "session_id": "uuid-scrubbed-0003"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "is_error": true,
+          "duration_api_ms": 0,
+          "num_turns": 0,
+          "stop_reason": null,
+          "session_id": "uuid-scrubbed-0003",
+          "total_cost_usd": 0,
+          "usage": {
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
+            "input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 0,
+            "server_tool_use": {
+              "web_search_requests": 0,
+              "web_fetch_requests": 0
+            },
+            "service_tier": "standard",
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "inference_geo": "",
+            "iterations": [],
+            "speed": "standard"
+          },
+          "modelUsage": {},
+          "permission_denials": [],
+          "terminal_reason": "aborted_streaming",
+          "fast_mode_state": "off",
+          "fast_mode_disabled_reason": "sdk_opt_in_required",
+          "subtype": "error_during_execution",
+          "errors": [
+            "[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=null"
+          ],
+          "type": "result",
+          "duration_ms": 0,
+          "uuid": "uuid-scrubbed-0013"
+        },
+        "meta": {
+          "interruptArtifact": true,
+          "interruptedTurn": true,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "command_lifecycle",
+          "command_uuid": "uuid-scrubbed-0001",
+          "state": "cancelled",
+          "uuid": "uuid-scrubbed-0014",
+          "session_id": "uuid-scrubbed-0003"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "command_lifecycle",
+          "command_uuid": "uuid-scrubbed-0008",
+          "state": "started",
+          "uuid": "uuid-scrubbed-0015",
+          "session_id": "uuid-scrubbed-0003"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "system",
+          "subtype": "init",
+          "cwd": "/scrubbed/cwd",
+          "session_id": "uuid-scrubbed-0003",
+          "tools": [
+            "Task",
+            "AskUserQuestion",
+            "Bash",
+            "CronCreate",
+            "CronDelete",
+            "CronList",
+            "DesignSync",
+            "Edit",
+            "EnterPlanMode",
+            "EnterWorktree",
+            "ExitPlanMode",
+            "ExitWorktree",
+            "ListAgents",
+            "Monitor",
+            "NotebookEdit",
+            "PushNotification",
+            "Read",
+            "RemoteTrigger",
+            "ReportFindings",
+            "ScheduleWakeup",
+            "SendMessage",
+            "Skill",
+            "TaskCreate",
+            "TaskGet",
+            "TaskList",
+            "TaskOutput",
+            "TaskStop",
+            "TaskUpdate",
+            "ToolSearch",
+            "WebFetch",
+            "WebSearch",
+            "Workflow",
+            "Write",
+            "mcp__claude_ai_Google_Calendar__create_event",
+            "mcp__claude_ai_Google_Calendar__delete_event",
+            "mcp__claude_ai_Google_Calendar__get_event",
+            "mcp__claude_ai_Google_Calendar__list_calendars",
+            "mcp__claude_ai_Google_Calendar__list_events",
+            "mcp__claude_ai_Google_Calendar__respond_to_event",
+            "mcp__claude_ai_Google_Calendar__search_events",
+            "mcp__claude_ai_Google_Calendar__suggest_time",
+            "mcp__claude_ai_Google_Calendar__update_event",
+            "mcp__claude_ai_Google_Drive__copy_file",
+            "mcp__claude_ai_Google_Drive__create_file",
+            "mcp__claude_ai_Google_Drive__download_file_content",
+            "mcp__claude_ai_Google_Drive__get_file_metadata",
+            "mcp__claude_ai_Google_Drive__get_file_permissions",
+            "mcp__claude_ai_Google_Drive__list_recent_files",
+            "mcp__claude_ai_Google_Drive__read_file_content",
+            "mcp__claude_ai_Google_Drive__search_files",
+            "mcp__claude_ai_Google_Drive__share_file",
+            "mcp__claude_ai_Google_Drive__trash_file",
+            "mcp__claude_ai_Google_Drive__update_file"
+          ],
+          "mcp_servers": [
+            {
+              "name": "claude.ai Atlassian Rovo",
+              "status": "pending"
+            },
+            {
+              "name": "claude.ai Zeno Grafana Dashboards",
+              "status": "pending"
+            },
+            {
+              "name": "claude.ai lastminute.com",
+              "status": "needs-auth"
+            },
+            {
+              "name": "claude.ai Sentry",
+              "status": "needs-auth"
+            },
+            {
+              "name": "claude.ai Three.js 3D Viewer",
+              "status": "pending"
+            },
+            {
+              "name": "claude.ai Postman",
+              "status": "pending"
+            },
+            {
+              "name": "claude.ai Context7",
+              "status": "pending"
+            },
+            {
+              "name": "claude.ai Netlify",
+              "status": "pending"
+            },
+            {
+              "name": "claude.ai Mermaid Chart",
+              "status": "needs-auth"
+            },
+            {
+              "name": "claude.ai Figma",
+              "status": "pending"
+            },
+            {
+              "name": "claude.ai Hugging Face",
+              "status": "pending"
+            },
+            {
+              "name": "claude.ai Gmail",
+              "status": "needs-auth"
+            },
+            {
+              "name": "claude.ai Google Calendar",
+              "status": "connected"
+            },
+            {
+              "name": "claude.ai Google Drive",
+              "status": "connected"
+            }
+          ],
+          "model": "claude-haiku-4-5-20251001",
+          "permissionMode": "default",
+          "slash_commands": [
+            "deep-research",
+            "design-sync",
+            "dataviz",
+            "update-config",
+            "verify",
+            "debug",
+            "code-review",
+            "simplify",
+            "batch",
+            "fewer-permission-prompts",
+            "doctor",
+            "loop",
+            "schedule",
+            "claude-api",
+            "run",
+            "run-skill-generator",
+            "agents",
+            "auto-mode-setup",
+            "autocompact",
+            "clear",
+            "color",
+            "compact",
+            "config",
+            "context",
+            "effort",
+            "fast",
+            "heapdump",
+            "init",
+            "mcp",
+            "import",
+            "model",
+            "__remote-workflow",
+            "workflow-launch-exec",
+            "reload-skills",
+            "rename",
+            "ultrareview",
+            "security-review",
+            "usage-credits",
+            "extra-usage",
+            "usage",
+            "insights",
+            "recap",
+            "goal",
+            "design",
+            "design-consent",
+            "design-revoke",
+            "list-agents",
+            "team-onboarding"
+          ],
+          "terminal_slash_commands": [
+            "doctor",
+            "color"
+          ],
+          "apiKeySource": "none",
+          "claude_code_version": "2.1.233",
+          "output_style": "default",
+          "agents": [
+            "claude",
+            "Explore",
+            "general-purpose",
+            "Plan",
+            "statusline-setup"
+          ],
+          "skills": [
+            "deep-research",
+            "design-sync",
+            "dataviz",
+            "update-config",
+            "verify",
+            "debug",
+            "code-review",
+            "simplify",
+            "batch",
+            "fewer-permission-prompts",
+            "doctor",
+            "loop",
+            "schedule",
+            "claude-api",
+            "run",
+            "run-skill-generator"
+          ],
+          "plugins": [],
+          "capabilities": [
+            "interrupt_receipt_v1",
+            "interrupt_cancel_queued_v1",
+            "msg-scrubbed-0001"
+          ],
+          "analytics_disabled": false,
+          "product_feedback_disabled": false,
+          "uuid": "uuid-scrubbed-0016",
+          "memory_paths": {
+            "auto": "/scrubbed/home/.claude/projects/scrubbed-project-slug/memory/"
+          },
+          "messaging_socket_path": "/tmp/cc-socks/67798.sock",
+          "fast_mode_state": "off",
+          "fast_mode_disabled_reason": "sdk_opt_in_required"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": true
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "system",
+          "subtype": "status",
+          "status": "requesting",
+          "uuid": "uuid-scrubbed-0017",
+          "session_id": "uuid-scrubbed-0003"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "rate_limit_event",
+          "rate_limit_info": {
+            "status": "allowed",
+            "resetsAt": 0,
+            "rateLimitType": "five_hour",
+            "overageStatus": "rejected",
+            "overageDisabledReason": "out_of_credits",
+            "isUsingOverage": false
+          },
+          "uuid": "uuid-scrubbed-0018",
+          "session_id": "uuid-scrubbed-0003"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "message_start",
+            "message": {
+              "model": "claude-haiku-4-5-20251001",
+              "id": "msg-scrubbed-0003",
+              "type": "message",
+              "role": "assistant",
+              "content": [],
+              "stop_reason": null,
+              "stop_sequence": null,
+              "stop_details": null,
+              "usage": {
+                "input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "cache_creation": {
+                  "ephemeral_5m_input_tokens": 0,
+                  "ephemeral_1h_input_tokens": 0
+                },
+                "output_tokens": 0,
+                "service_tier": "standard",
+                "inference_geo": "not_available"
+              },
+              "diagnostics": null
+            }
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0019",
+          "ttft_ms": 0
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+              "type": "thinking",
+              "thinking": "",
+              "signature": ""
+            }
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0020"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "system",
+          "subtype": "thinking_tokens",
+          "estimated_tokens": 5,
+          "estimated_tokens_delta": 5,
+          "uuid": "uuid-scrubbed-0021",
+          "session_id": "uuid-scrubbed-0003"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+              "type": "thinking_delta",
+              "thinking": "The user is asking",
+              "estimated_tokens": null
+            }
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0022"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "system",
+          "subtype": "thinking_tokens",
+          "estimated_tokens": 31,
+          "estimated_tokens_delta": 26,
+          "uuid": "uuid-scrubbed-0023",
+          "session_id": "uuid-scrubbed-0003"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+              "type": "thinking_delta",
+              "thinking": " me to count from 1 to 30, one number per line, then say DONE, and also say BANANA at the end. This is a",
+              "estimated_tokens": null
+            }
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0024"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "system",
+          "subtype": "thinking_tokens",
+          "estimated_tokens": 56,
+          "estimated_tokens_delta": 25,
+          "uuid": "uuid-scrubbed-0025",
+          "session_id": "uuid-scrubbed-0003"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+              "type": "thinking_delta",
+              "thinking": " simple task that doesn't require any tool use. I should just output the numbers 1-30, each on a new",
+              "estimated_tokens": null
+            }
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0026"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "system",
+          "subtype": "thinking_tokens",
+          "estimated_tokens": 64,
+          "estimated_tokens_delta": 8,
+          "uuid": "uuid-scrubbed-0027",
+          "session_id": "uuid-scrubbed-0003"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+              "type": "thinking_delta",
+              "thinking": " line, then DONE, then BANANA.",
+              "estimated_tokens": null
+            }
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0028"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "system",
+          "subtype": "thinking_tokens",
+          "estimated_tokens": 132,
+          "estimated_tokens_delta": 68,
+          "uuid": "uuid-scrubbed-0029",
+          "session_id": "uuid-scrubbed-0003"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+              "type": "signature_delta",
+              "signature": "EogECqgBCBAYAipAPRA+2wf3qeWe7NaM7/Hy0KxG1jrNAUVEwYeuqoZ8EVg/ytJgDjab5pwo6ny8wG21u8+xG74Y43SB+aVhmH3OdTIZY2xhdWRlLWhhaWt1LTQtNS0yMDI1MTAwMTgAQgh0aGlua2luZ1okYzM0MWE5YTYtOWY3Yi00OTEyLWIyNDEtYjExODhiNjBhMWRlchCAh6VC6syYqG9oxmFJxDd3iAEBEgxzO+OQPu6QixjhLXkaDE7CU9sd6qeqhgWp6iIw14T3ynFQFfDNny8cL0k/5kFDBitWxX1adw1pNny0ArhQXx3ndCkcVBxtTxMRzjTpKowCtIuzer3d4+/onCMOKsFJaRx3Nwkb25ejrY8wp3d6Wou78o4gMwWzF4TJDQUcBQh5cEJ/lHiTQqDk9v8LQkMdZMMzumPgvD7n4Id/UMaCNJVQPIJ4UGlaNfqm89ilxkIly0+h4PXN5R0SAG7IFjRDe567jDyR99LMvzFSYZR1QZtK8Cz6d+cmavTNHPXATV75wsA95fP4/A5rTHMNgwepgYYO6ynsF/76Sw9p4MTOSr+a5m4wkk83DOKlf01AC22ZzXh/2kLBJZmQ7/cy7MjIG/yLr2yREFrDa1i/T3XvjkrT2Eq5iMeIjOyoKCVt3XkhhlqYAnhUjJV2vMSygRAuUQycHvwqiRsGjFMauxgB"
+            }
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0030"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "assistant",
+          "message": {
+            "model": "claude-haiku-4-5-20251001",
+            "id": "msg-scrubbed-0003",
+            "type": "message",
+            "role": "assistant",
+            "content": [
+              {
+                "type": "thinking",
+                "thinking": "The user is asking me to count from 1 to 30, one number per line, then say DONE, and also say BANANA at the end. This is a simple task that doesn't require any tool use. I should just output the numbers 1-30, each on a new line, then DONE, then BANANA.",
+                "signature": "EogECqgBCBAYAipAPRA+2wf3qeWe7NaM7/Hy0KxG1jrNAUVEwYeuqoZ8EVg/ytJgDjab5pwo6ny8wG21u8+xG74Y43SB+aVhmH3OdTIZY2xhdWRlLWhhaWt1LTQtNS0yMDI1MTAwMTgAQgh0aGlua2luZ1okYzM0MWE5YTYtOWY3Yi00OTEyLWIyNDEtYjExODhiNjBhMWRlchCAh6VC6syYqG9oxmFJxDd3iAEBEgxzO+OQPu6QixjhLXkaDE7CU9sd6qeqhgWp6iIw14T3ynFQFfDNny8cL0k/5kFDBitWxX1adw1pNny0ArhQXx3ndCkcVBxtTxMRzjTpKowCtIuzer3d4+/onCMOKsFJaRx3Nwkb25ejrY8wp3d6Wou78o4gMwWzF4TJDQUcBQh5cEJ/lHiTQqDk9v8LQkMdZMMzumPgvD7n4Id/UMaCNJVQPIJ4UGlaNfqm89ilxkIly0+h4PXN5R0SAG7IFjRDe567jDyR99LMvzFSYZR1QZtK8Cz6d+cmavTNHPXATV75wsA95fP4/A5rTHMNgwepgYYO6ynsF/76Sw9p4MTOSr+a5m4wkk83DOKlf01AC22ZzXh/2kLBJZmQ7/cy7MjIG/yLr2yREFrDa1i/T3XvjkrT2Eq5iMeIjOyoKCVt3XkhhlqYAnhUjJV2vMSygRAuUQycHvwqiRsGjFMauxgB"
+              }
+            ],
+            "stop_reason": null,
+            "stop_sequence": null,
+            "stop_details": null,
+            "usage": {
+              "input_tokens": 0,
+              "cache_creation_input_tokens": 0,
+              "cache_read_input_tokens": 0,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 0
+              },
+              "output_tokens": 0,
+              "service_tier": "standard",
+              "inference_geo": "not_available"
+            },
+            "diagnostics": null,
+            "context_management": null
+          },
+          "parent_tool_use_id": null,
+          "session_id": "uuid-scrubbed-0003",
+          "uuid": "uuid-scrubbed-0031",
+          "timestamp": "2026-08-17T20:36:44.777Z",
+          "request_id": "req_011Ce8xnkjNfViYC3GGZ6Xvr"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_stop",
+            "index": 0
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0032"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {
+              "type": "text",
+              "text": ""
+            }
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0033"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": {
+              "type": "text_delta",
+              "text": "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15"
+            }
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0034"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": {
+              "type": "text_delta",
+              "text": "\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n\nDONE\n\nBANANA"
+            }
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0035"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "assistant",
+          "message": {
+            "model": "claude-haiku-4-5-20251001",
+            "id": "msg-scrubbed-0003",
+            "type": "message",
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n\nDONE\n\nBANANA"
+              }
+            ],
+            "stop_reason": null,
+            "stop_sequence": null,
+            "stop_details": null,
+            "usage": {
+              "input_tokens": 0,
+              "cache_creation_input_tokens": 0,
+              "cache_read_input_tokens": 0,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 0
+              },
+              "output_tokens": 0,
+              "service_tier": "standard",
+              "inference_geo": "not_available"
+            },
+            "diagnostics": null,
+            "context_management": null
+          },
+          "parent_tool_use_id": null,
+          "session_id": "uuid-scrubbed-0003",
+          "uuid": "uuid-scrubbed-0036",
+          "timestamp": "2026-08-17T20:36:45.043Z",
+          "request_id": "req_011Ce8xnkjNfViYC3GGZ6Xvr"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_stop",
+            "index": 1
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0037"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "message_delta",
+            "delta": {
+              "stop_reason": "end_turn",
+              "stop_sequence": null,
+              "stop_details": null
+            },
+            "usage": {
+              "input_tokens": 0,
+              "cache_creation_input_tokens": 0,
+              "cache_read_input_tokens": 0,
+              "output_tokens": 0,
+              "output_tokens_details": {
+                "thinking_tokens": 0
+              },
+              "iterations": [
+                {
+                  "input_tokens": 0,
+                  "output_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "cache_creation_input_tokens": 0,
+                  "cache_creation": {
+                    "ephemeral_5m_input_tokens": 0,
+                    "ephemeral_1h_input_tokens": 0
+                  },
+                  "type": "message"
+                }
+              ]
+            },
+            "context_management": {
+              "applied_edits": []
+            }
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0038"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "type": "stream_event",
+          "event": {
+            "type": "message_stop"
+          },
+          "session_id": "uuid-scrubbed-0003",
+          "parent_tool_use_id": null,
+          "uuid": "uuid-scrubbed-0039"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
+          "is_error": false,
+          "duration_api_ms": 0,
+          "num_turns": 0,
+          "stop_reason": "end_turn",
+          "session_id": "uuid-scrubbed-0003",
+          "total_cost_usd": 0,
+          "usage": {
+            "input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 0,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
+            "server_tool_use": {
+              "web_search_requests": 0,
+              "web_fetch_requests": 0
+            },
+            "service_tier": "standard",
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "inference_geo": "not_available",
+            "iterations": [
+              {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cache_creation": {
+                  "ephemeral_5m_input_tokens": 0,
+                  "ephemeral_1h_input_tokens": 0
+                },
+                "type": "message"
+              }
+            ],
+            "speed": "standard"
+          },
+          "modelUsage": {
+            "claude-haiku-4-5-20251001": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0,
+              "webSearchRequests": 0,
+              "costUSD": 0,
+              "contextWindow": 0,
+              "maxOutputTokens": 0,
+              "canonicalModel": "claude-haiku-4-5",
+              "provider": "firstParty"
+            }
+          },
+          "permission_denials": [],
+          "terminal_reason": "completed",
+          "fast_mode_state": "off",
+          "fast_mode_disabled_reason": "sdk_opt_in_required",
+          "subtype": "success",
+          "api_error_status": null,
+          "result": "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n\nDONE\n\nBANANA",
+          "ttft_ms": 0,
+          "ttft_stream_ms": 0,
+          "time_to_request_ms": 0,
+          "user_message_uuid": "uuid-scrubbed-0008",
+          "request_sent_wall_ms": 0,
+          "type": "result",
+          "duration_ms": 0,
+          "uuid": "uuid-scrubbed-0040"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    }
+  ]
+}
