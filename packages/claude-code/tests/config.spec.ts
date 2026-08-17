@@ -24,6 +24,7 @@ describe('resolveClaudeCodeConfig defaults', () => {
         delegatedTimeoutMs: DEFAULT_DELEGATED_ASK_TIMEOUT_MS,
         fallback: 'deny',
         persistAlwaysAllow: true,
+        rules: [],
       },
       limits: {
         maxConcurrentSessions: DEFAULT_MAX_CONCURRENT_SESSIONS,
@@ -85,6 +86,7 @@ describe('resolveClaudeCodeConfig defaults', () => {
         fallback: 'first-option',
         persistAlwaysAllow: false,
         ruleCachePath: '/tmp/cc-rules.json',
+        rules: [{ toolName: 'Bash', ruleContent: 'npm test:*' }],
       },
       limits: { maxConcurrentSessions: 1, maxBudgetUsd: 10 },
       env: { CLAUDE_CODE_MAX_RETRIES: '2' },
@@ -105,6 +107,7 @@ describe('resolveClaudeCodeConfig defaults', () => {
       fallback: 'first-option',
       persistAlwaysAllow: false,
       ruleCachePath: '/tmp/cc-rules.json',
+      rules: [{ toolName: 'Bash', ruleContent: 'npm test:*' }],
     })
     expect(resolved.limits).toEqual({ maxConcurrentSessions: 1, maxBudgetUsd: 10 })
     expect(resolved.env).toEqual({ CLAUDE_CODE_MAX_RETRIES: '2' })

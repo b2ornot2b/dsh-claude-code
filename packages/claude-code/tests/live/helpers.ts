@@ -22,15 +22,21 @@ import { execFile } from 'node:child_process'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { promisify } from 'node:util'
 
 import { Context } from '@deepseek-ai/cordis'
+import AgentRegistry from '@deepseek-ai/dsh-agent'
+import type { Agent } from '@deepseek-ai/dsh-agent'
 import { ClaudeCodeService } from '@deepseek-ai/dsh-claude-code'
 import type {
   CcBackendQuery, CcMessageEnvelope, CcSdkMessage, CcSdkUserMessage, CcSession, ClaudeCodeConfig,
   ClaudeCodeServiceDeps, QueryBackend,
 } from '@deepseek-ai/dsh-claude-code'
-import { SessionStore } from '@deepseek-ai/dsh-session'
+import { SessionId, SessionStore } from '@deepseek-ai/dsh-session'
+import type { Session } from '@deepseek-ai/dsh-session'
+import ApprovalService from '@deepseek-ai/dsh-user-approval'
+import UserQuestionService from '@deepseek-ai/dsh-user-questions'
 
 const execFileP = promisify(execFile)
 
@@ -163,6 +169,107 @@ export async function disposeLiveWithStore(mounted: LiveMountWithStore): Promise
   await mounted.storeFiber.dispose()
   await mounted.fiber.dispose()
   await mounted.ctx.fiber.dispose()
+}
+
+/**
+ * One mounted live service ALONGSIDE the full ask-channel composition: a real
+ * `SessionStore`, `AgentRegistry`, `UserQuestionService` and `ApprovalService`
+ * — the same four seams `ask-dsh-seams.spec.ts` mounts offline, but here
+ * driving a REAL Claude Code subprocess's REAL `canUseTool` callback (the
+ * per-session `CcAskRouter` `ClaudeCodeService.open()` builds by default —
+ * nothing here overrides `deps.canUseTool`).
+ */
+export interface LiveMountWithAsk extends LiveMountWithStore {
+  /** Disposer for the `AgentRegistry` plugin fiber. */
+  readonly agentFiber: Awaited<ReturnType<Context['plugin']>>
+  /** Disposer for the `UserQuestionService` plugin fiber. */
+  readonly questionsFiber: Awaited<ReturnType<Context['plugin']>>
+  /** Disposer for the `ApprovalService` plugin fiber. */
+  readonly approvalFiber: Awaited<ReturnType<Context['plugin']>>
+}
+
+/**
+ * Mount a REAL `ClaudeCodeService` plus the REAL dsh ask-channel seams in one
+ * cordis `Context`: `SessionStore`, `AgentRegistry`, `UserQuestionService`,
+ * `ApprovalService`. Pair with {@link registerLiveRootAgent} to get a live
+ * agent with an open turn, then `service.open({ ask: { agent, delegated },
+ * mirror: { session: agent's own session } })` — §7's Agent-adapter
+ * convention: the agent's `session` member IS the mirrored session, so the
+ * `approval/asked` audit pair and the mirrored `tool/call` land in the same
+ * log and can be correlated directly.
+ * @param config - surface config overrides, exactly as {@link mountLive}.
+ * @param deps - injectable seams, exactly as {@link mountLive}. Never override
+ *   `canUseTool` here — the whole point is exercising the real router.
+ * @param approvalPolicy - `ctx.approval`'s session-default policy (`'ask'`
+ *   unless a test needs the deterministic `'never'` fold).
+ * @returns the mounted context, every fiber, the service and the store.
+ */
+export async function mountLiveWithAsk(
+  config: ClaudeCodeConfig = {},
+  deps: ClaudeCodeServiceDeps = {},
+  approvalPolicy: 'ask' | 'never' = 'ask',
+): Promise<LiveMountWithAsk> {
+  const ctx = new Context()
+  let service: ClaudeCodeService | undefined
+  function claudeCodeLiveAskMount(inner: Context): void {
+    service = new ClaudeCodeService(
+      inner,
+      { ...config, defaults: { ...config.defaults, settingSources: config.defaults?.settingSources ?? [], model: LIVE_MODEL } },
+      deps)
+  }
+  const fiber = await ctx.plugin(claudeCodeLiveAskMount)
+  const storeFiber = await ctx.plugin(SessionStore)
+  const agentFiber = await ctx.plugin(AgentRegistry)
+  const questionsFiber = await ctx.plugin(UserQuestionService)
+  const approvalFiber = await ctx.plugin(ApprovalService, { policy: approvalPolicy })
+  const store = ctx.get('sessions')
+  if (service === undefined || store === undefined) {
+    throw new Error('mountLiveWithAsk: mount did not construct the service or the store')
+  }
+  return { ctx, fiber, service, store, storeFiber, agentFiber, questionsFiber, approvalFiber }
+}
+
+/** Dispose a {@link mountLiveWithAsk} mount all the way down, every seam included. */
+export async function disposeLiveWithAsk(mounted: LiveMountWithAsk): Promise<void> {
+  await mounted.approvalFiber.dispose()
+  await mounted.questionsFiber.dispose()
+  await mounted.agentFiber.dispose()
+  await mounted.storeFiber.dispose()
+  await mounted.fiber.dispose()
+  await mounted.ctx.fiber.dispose()
+}
+
+/** One minimal live root agent, registered with the REAL `AgentRegistry` — the exact shape `ask-dsh-seams.spec.ts` uses offline. */
+export interface LiveRootAgent {
+  /** The dsh agent both `ctx.approval` and `ctx.userQuestions` recognize as live. */
+  readonly agent: Agent
+  /** Its session — per §7, this doubles as the mirrored session. */
+  readonly session: Session
+  /** Detach the agent from the registry. */
+  dispose(): Promise<void>
+}
+
+/**
+ * Register one minimal live root agent on a {@link mountLiveWithAsk} context:
+ * a real dsh `Session` (created via `ctx.sessions.create`) and an `Agent`
+ * wrapping it, registered through `ctx.agents.register()` exactly as the
+ * offline composition suite does. The caller still owns opening a turn on its
+ * session (`session.append('turn/start', { turn: 1 })`) at the point its test
+ * scenario requires one.
+ * @param ctx - a context with `AgentRegistry` already mounted (via {@link mountLiveWithAsk}).
+ * @param sessionId - the shared id; a fresh UUID-backed one when omitted.
+ * @returns the agent, its session, and a disposer.
+ */
+export async function registerLiveRootAgent(ctx: Context, sessionId?: string): Promise<LiveRootAgent> {
+  const id = SessionId(sessionId ?? randomUUID())
+  const session = ctx.sessions.create(id)
+  // The minimal live Agent both `ctx.approval` and `ctx.userQuestions` accept:
+  // they reach `agent.session` and use the object itself as the scope carrier.
+  const agent = { id, session, ctx } as unknown as Agent
+  const fiber = await ctx.plugin(Object.assign((inner: Context) => {
+    inner.agents.register(agent)
+  }, { inject: ['agents'] }))
+  return { agent, session, dispose: async () => { await fiber.dispose() } }
 }
 
 /** A fresh, empty, absolute tmp directory. The caller removes it with {@link removeCwd}. */

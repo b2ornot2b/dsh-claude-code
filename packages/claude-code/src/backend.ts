@@ -87,9 +87,47 @@ export interface CcSdkUserMessage {
 }
 
 /**
- * Context the SDK hands to the permission callback. A subset of the SDK's
- * object: it carries more fields (`suggestions`, `matchedAskRule`, …) that
- * Phase 4 will add here when it starts using them.
+ * One rule inside a {@link CcPermissionSuggestion} — the exact shape the SDK's
+ * `PermissionRuleValue` carries, and the shape the integration-owned rule cache
+ * stores (`src/ask/rules.ts`).
+ */
+export interface CcPermissionRuleValue {
+  /** The tool the rule is about (`'Bash'`, `'Read'`, …). */
+  readonly toolName: string
+  /** The rule body, e.g. a Bash prefix pattern (`'npm test:*'`). Absent means "the whole tool". */
+  readonly ruleContent?: string
+}
+
+/**
+ * One permission update the CLI SUGGESTS when it prompts ("allow this again
+ * without asking"). Deliberately looser than the SDK's six-variant union so a
+ * new variant cannot break the build — every field a variant may carry is
+ * optional here, and the router reads only `type`/`behavior`/`destination`/`rules`.
+ *
+ * **These are never echoed back.** Phase 0 spike 4 proved a headless
+ * `canUseTool` returning `updatedPermissions` writes nothing to disk with any
+ * `settingSources` value: persistence is the interactive TUI's job. The
+ * integration owns its own rule cache instead, and these suggestions are the
+ * KEY it is consulted with.
+ */
+export interface CcPermissionSuggestion {
+  /** `'addRules'`, `'replaceRules'`, `'removeRules'`, `'setMode'`, `'addDirectories'`, `'removeDirectories'`. */
+  readonly type: string
+  /** Where the CLI would have written it (`'localSettings'` is the project-local layer). */
+  readonly destination: string
+  /** `'allow'` / `'deny'` / `'ask'` on the rule variants. */
+  readonly behavior?: string
+  /** The rules, on the rule variants. */
+  readonly rules?: readonly CcPermissionRuleValue[]
+  /** The directories, on the directory variants. */
+  readonly directories?: readonly string[]
+  /** The mode, on the `setMode` variant. */
+  readonly mode?: string
+}
+
+/**
+ * Context the SDK hands to the permission callback (delta S2). Every field the
+ * ask channel reads is declared; the SDK's object carries a few more.
  */
 export interface CcPermissionRequest {
   /** Aborted when the tool call is abandoned; settle the ask and answer promptly. */
@@ -110,6 +148,25 @@ export interface CcPermissionRequest {
   readonly decisionReason?: string
   /** Sub-agent id, when the call came from a subagent rather than the main thread. */
   readonly agentID?: string
+  /**
+   * What the CLI would persist if a human said "always allow". The rule cache
+   * (`src/ask/rules.ts`) is keyed on the `destination: 'localSettings'` entries;
+   * they are NEVER echoed back as `updatedPermissions` (spike 4).
+   */
+  readonly suggestions?: readonly CcPermissionSuggestion[]
+  /**
+   * Set when a user-configured `permissions.ask` RULE forced this prompt. A
+   * rule-forced ask states the user's own intent to be asked, so the rule cache
+   * must not short-circuit it.
+   */
+  readonly matchedAskRule?: {
+    /** Which settings layer the ask rule came from. */
+    readonly source: string
+    /** The tool the ask rule names. */
+    readonly toolName: string
+    /** The rule body, when the ask rule is scoped. */
+    readonly ruleContent?: string
+  }
 }
 
 /**
@@ -137,9 +194,10 @@ export type CcPermissionDecision =
   }
 
 /**
- * The permission callback signature, in this seam's vocabulary. Phase 4 replaces
- * the default implementation with the ask router; Phase 2 ships a fail-closed
- * deny so a live session can never silently act without a decision.
+ * The permission callback signature, in this seam's vocabulary. The ask router
+ * (`src/ask/router.ts`) is the real implementation; a session wired to no ask
+ * channel keeps the fail-closed deny, so a live session can never silently act
+ * without a decision.
  */
 export type CcCanUseTool = (
   toolName: string,

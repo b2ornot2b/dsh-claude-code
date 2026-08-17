@@ -16,18 +16,20 @@ Consumers:
 > (`packages/claude-code/claude-code/`) is a mechanical move rather than a rename — we do not
 > own the `@deepseek-ai` npm scope and cannot publish into it.
 
-**Phase status: Phase 3 (mirror).** `open()` is real: it mints the shared dsh/CC id,
+**Phase status: Phase 4 (ask channel).** `open()` is real: it mints the shared dsh/CC id,
 resolves the SDK options, spawns (or adopts a pre-warmed) Claude Code subprocess, awaits the
 initialize handshake and registers the session. `send()` / `interrupt()` / `waitForResult()` /
 `onMessage()` / `onSend()` live on the `CcSession` actor, reachable through
 `ctx.claudeCode.session(id)`. A session's traffic can now be projected into a real dsh
-session log — see [Mirroring](#mirroring-into-a-dsh-session-log).
+session log — see [Mirroring](#mirroring-into-a-dsh-session-log). Permission prompts,
+clarifying questions and plan reviews now route to the dsh `ctx.approval` / `ctx.userQuestions`
+seams — see [The ask channel](#the-ask-channel).
 
-Two things are still stubs, by design and with the phase named in the code: `canUseTool`
-fails CLOSED (every tool call is denied with an explanation) until **Phase 4** wires the dsh
-ask channel, and the model-facing `claude_code_*` tools in
-`@deepseek-ai/dsh-tool-claude-code` are still registered-but-inert scaffolds until
-**Phase 5**.
+One thing is still a stub, by design and with the phase named in the code: the model-facing
+`claude_code_*` tools in `@deepseek-ai/dsh-tool-claude-code` are registered-but-inert
+scaffolds until **Phase 5**. A session opened with no ask target still fails CLOSED (every
+tool call denied with an explanation), which is the correct posture for a session nobody is
+watching.
 
 ### Running the tests
 
@@ -65,7 +67,7 @@ assumes it can will be silently wrong the first time CC auto-compacts.
 
 ## Service API (`ctx.claudeCode`)
 
-| Member | Phase 3 behavior |
+| Member | Phase 4 behavior |
 |---|---|
 | `open(options)` | opens (or resumes, or forks) a live session and returns its snapshot. Refuses a non-absolute or missing `cwd` with `INVALID_CWD` **before** anything spawns, and a session past `limits.maxConcurrentSessions` with `SESSION_LIMIT` |
 | `get(id)` | the live snapshot of a registered session (status, model, pending asks), `undefined` when unknown |
@@ -74,10 +76,71 @@ assumes it can will be silently wrong the first time CC auto-compacts.
 | `session(id)` | the `CcSession` actor — `send` / `interrupt` / `waitForResult` / `onMessage`. Values (snapshots) cross tool boundaries; this handle does not |
 | `accountInfo()` | the account from the first live session's cached initialize response. Throws `NO_LIVE_SESSION` when nothing is open: it never spawns a subprocess of its own |
 | `attachMirror(id, session, opts?)` | mirrors a live session into a dsh session log (see below). Throws `UNKNOWN_SESSION` for an unregistered id; when the session closes the mirror is finalized (a turn left open by a mid-turn death is closed as `aborted`/`disposed`) and then detached |
+| `attachAskTarget(id, target)` | sets who answers that session's permission prompts, questions and plan reviews; returns a disposer. Prefer `open({ ask })` — see the ask channel below |
 | `config` | the schemastery-validated configuration |
 
 All session lifecycle is registered through `ctx.effect()`, so disposing the plugin fiber
 (HMR, plugin unload, process teardown) closes every session this service opened.
+
+## The ask channel
+
+Claude Code asks for three things through one callback, and each goes to the dsh seam that
+owns it: `AskUserQuestion` → `ctx.userQuestions.ask()`, `ExitPlanMode` → the same seam with
+dsh's own `plan-review` intent, everything else → `ctx.approval.request()`.
+
+```ts
+// Attach WHO answers at open time: the opening prompt is sent synchronously inside open(),
+// so a target attached afterwards can miss the first tool call (which then fails closed).
+await ctx.claudeCode.open({
+  cwd,
+  prompt,
+  ask: { agent: exec.agent, delegated: false },   // Phase 5 passes the delegating agent
+  mirror: { session: dshSession },                // gives approvals a real callId (§4.4)
+})
+```
+
+Both seams are optional, and they fail differently on purpose:
+
+- **No `ctx.approval`** → fail-closed deny, with an explanation. No fallback policy can turn
+  a missing approver into a grant.
+- **No `ctx.userQuestions`** (or any `UserQuestionError`: `DELEGATED_CALLER`,
+  `CALLER_NOT_LIVE`, `NO_PROVIDER`, `ASK_ABORTED`, `ASK_CANCELLED`, `ASK_MISSING_AGENT`,
+  `BAD_INTENT`, `EMPTY_QUESTIONS`) → the configured `ask.fallback`.
+
+`ask.fallback` also covers approval `'unavailable'` and timeouts — never a decision. A
+`rejected` (including the deterministic `policy: 'never'` fold) or `cancelled` outcome is
+answered as-is.
+
+| `ask.fallback` | behaviour |
+|---|---|
+| `deny` (default) | deny, telling Claude to proceed on its best assumption and say what it assumed |
+| `first-option` | auto-answer each clarifying question with its first option, logged loudly. Permission prompts and plan reviews are DENIED instead: their first option is a grant |
+| `error` | deny with `interrupt: true`, and surface a typed `ASK_UNANSWERABLE` error on the session (`session.onAskError`, `session.lastAskError`) |
+
+Two invariants worth stating plainly, because both failure modes are unrecoverable: this
+callback **never rejects** and **never returns `null`**. Either one leaves the Claude Code
+subprocess waiting forever — permission prompts have no park deadline. Every error path,
+including a dsh service throwing, becomes a decision.
+
+Asks are tracked in a per-session table keyed by the SDK's `requestId`, so a redelivery after
+`reinitialize()` returns the original answer instead of prompting a human twice; the table
+settles on an answer, an abort, `ask.timeoutMs` / `ask.delegatedTimeoutMs`, or session close
+(`close()` drains it before the query goes away). `session.pendingAsks` — and the snapshot
+field of the same name — report what is still waiting.
+
+Four orderings the table is explicit about, because each of them is a way to hang or mislead
+a session rather than merely to answer it oddly:
+
+- A **redelivery arms its own `signal`** on the ask it joins. After a `reinitialize()` the
+  newest delivery is the live transport, and only it can report a withdrawal.
+- **`ask.timeoutMs` unset installs no timer at all** — an interactive ask pends until a human,
+  an abort, or `close()` reaches it. (A wait longer than `setTimeout`'s 32-bit ceiling is
+  clamped to the ceiling; unclamped, Node would fire it after 1ms and deny instantly.)
+- **An ask withdrawn while its `callId` is being correlated is never asked** — no synthesized
+  `tool/call`, no `approval/asked` pair for a tool call Claude Code abandoned.
+- **Nothing is answered from another ask's decision.** The table key falls back to the
+  `tool_use` id (then to a counter) if a delivery ever arrives without a `requestId`, because
+  two calls sharing one key would hand the second one a grant nobody gave.
 
 ## Mirroring into a dsh session log
 
@@ -147,7 +210,8 @@ claude-code:
     delegatedTimeoutMs: 120000    # bounded wait when no human can be reached
     fallback: deny                # deny | first-option | error
     persistAlwaysAllow: true      # integration-owned rule cache — NOT SDK persistence
-    ruleCachePath: null           # where that cache lives; null = harness default location
+    ruleCachePath: null           # null = <cwd>/.dsh-claude-code/always-allow.json
+    rules: []                     # preseeded always-allow rules: [{ toolName, ruleContent }]
   limits:
     maxConcurrentSessions: 4
     maxBudgetUsd: null
@@ -169,6 +233,16 @@ That disk write is the interactive TUI's job and is not part of `query()`'s cont
 "always allow" is an **integration-owned rule cache**: a JSON store this package writes and
 consults inside `canUseTool` before prompting, which keeps `settingSources: []` isolation
 intact. `ruleCachePath` names that store. Do not ship `settingSources: ['local']` to get it.
+
+It lives at `<cwd>/.dsh-claude-code/always-allow.json` by default (`ruleCachePath` may be
+absolute, or relative to the session `cwd`) and holds
+`{ "version": 1, "rules": [{ "toolName": "Bash", "ruleContent": "npm test:*" }] }`. It is
+consulted conservatively: a prompt is skipped only when EVERY rule of the
+`destination: 'localSettings'` allow-rule suggestion the CLI attached to that prompt is
+already stored for that tool, and never when the prompt was forced by the user's own
+`permissions.ask` rule. A missing, unreadable or malformed file is an empty cache plus a log
+line — the fail-closed direction here is "prompt the human". `persistAlwaysAllow: false`
+disables reads as well as writes.
 
 ### Install size and the executable escape hatch
 
@@ -261,11 +335,16 @@ turn/step/chunk vocabulary as a native one — streaming text and reasoning, too
 their results, todo snapshots, and a turn that ends `completed` / `aborted` / `error`. The
 `claude-code/compact` event marks where CC compacted its own transcript.
 
+Phase 4 adds the other half of that human-facing picture: an approval prompt now appends the
+`approval/asked` + `approval/decided` audit pair to the ASKING agent's session, carrying the
+`callId` of the `tool/call` the mirror already streamed — so a UI can attach the prompt to the
+exact call it is about, instead of showing a tool call that silently failed.
+
 Two things a reader of that log must not assume. It is **not** the model's context (§5.1):
 Claude Code owns and compacts its own history, so `deriveMessages()` reconstructs what dsh
-observed, never what CC will send. And permission prompts are still invisible in it: the
-`approval/asked` + `approval/decided` pair arrives with the ask channel in **Phase 4**, so
-today's log shows a tool call that was silently denied by the fail-closed stub.
+observed, never what CC will send. And the approval log is not a complete record of what CC
+ran: the CLI's safe-command classifier auto-approves trivial commands below `canUseTool`, and
+a rule-cache hit skips the prompt by design.
 
 #### KV Cache effect
 
@@ -275,10 +354,18 @@ over its own transcript, which the dsh mirror neither feeds nor invalidates.
 
 ## Known Limitations and Deferred Work
 
-- **Every tool call is denied until Phase 4** — the session's `canUseTool` is a fail-closed
-  stub that answers `deny` with an explanation naming the phase. A live session can read
-  nothing and write nothing until the dsh ask channel is wired; that is deliberate (a
-  silently-allowing default is the one failure mode that cannot be undone).
+- **No UI can add an always-allow rule yet** — dsh's approval vocabulary has no `'always'`
+  outcome (`allowed-once | rejected | cancelled | unavailable`), and the questions seam is not
+  a permission channel, so nothing a human clicks can write the rule cache. Entries come from
+  `ask.rules` in configuration or programmatically via `CcAskRules.add()`. When dsh grows the
+  outcome, the UI-driven path is one `add()` call away and nothing else changes.
+- **A session with no ask target denies every tool call** — that is the fail-closed default,
+  not a stub: a silently-allowing default is the one failure mode that cannot be undone.
+  Attach a target at `open({ ask })` (or `attachAskTarget`) to give a session a human.
+- **`ask.fallback: 'first-option'` never answers a permission prompt or a plan review** —
+  §4.5's table says "approvals denied", and a plan review's first option (`Approve`) is a
+  grant of exactly the authority the review exists to withhold. Only clarifying questions are
+  auto-answered, and every auto-answer is logged loudly.
 - **A `claude-code/compact` event cannot be marked `ignorable` (dsh rc.7)** — a custom
   session event must carry `ignorable: true` on its ENVELOPE, or a persistence read path
   whose build does not know the type refuses the whole log. `Session.append()` builds and
@@ -333,6 +420,11 @@ over its own transcript, which the dsh mirror neither feeds nor invalidates.
 - **"Always allow" persistence is integration-owned** — the SDK never writes
   `settings.local.json` from a headless `canUseTool`, so rules cached by this package are not
   visible to the user's interactive Claude Code CLI, and vice versa. Two rule stores, no sync.
+- **The rule cache is read once per session and written with a read-merge** — `add()` folds
+  the file's current contents in before writing, so one session cannot delete a grant another
+  just made. It is still a small local JSON file touched by synchronous `readFileSync` /
+  `writeFileSync` on the permission path, and a writer racing between our read and our
+  `rename` would still win; do not point `ruleCachePath` at a shared network location.
 - **`cancel(keep_queued: false)` cannot use the native path** — the CLI advertises
   `interrupt_cancel_queued_v1`, but SDK 0.3.233 exposes no way to drive it (`interrupt()`
   takes no arguments). Queued-message cancellation is therefore emulated at our layer by

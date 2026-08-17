@@ -224,11 +224,14 @@ packages on deliberately different planes:
 
 ## 4. The seam's exact export surface
 
-`import { … } from '@deepseek-ai/dsh-claude-code'`. **Twenty-eight** runtime
+`import { … } from '@deepseek-ai/dsh-claude-code'`. **Fifty-one** runtime
 exports (pinned by `packages/claude-code/tests/exports.spec.ts` — Phase 2 added
 `CcSession`, `WarmPool`, `realBackend`, `createInputStream`, `resolveQueryOptions`,
 `buildSessionEnv`, `warmFingerprint`; Phase 3 added `CcMirror`, `attachMirror`,
-`CC_COMPACT_EVENT`, `markEventIgnorable`) plus the types below. Nothing else
+`CC_COMPACT_EVENT`, `markEventIgnorable`; Phase 4 added the ask channel —
+`CcAskRouter`, `CcAskTable`, `CcAskRules`, `applyAskFallback`, `mapQuestions`,
+`mapAnswers`, `describeCall`, `describeReason`, `askErrorCode`,
+`resolveRuleCachePath` and their constants) plus the types below. Nothing else
 exists; nothing else will be added without updating this document.
 
 **No export references a Claude Agent SDK type.** `src/backend.ts` re-states, in
@@ -251,10 +254,12 @@ class ClaudeCodeService extends Service implements ClaudeCode {
   accountInfo(): Promise<CcAccountInfo>
   // Phase 3:
   attachMirror(id: CcSessionId, session: Session, options?: CcMirrorOptions): CcMirrorHandle
+  // Phase 4:
+  attachAskTarget(id: CcSessionId, target: CcAskTarget): () => void
 }
 
 /** The capability, for typing against the seam rather than the class. */
-interface ClaudeCode { /* the six methods above, identical signatures */ }
+interface ClaudeCode { /* the seven methods above, identical signatures */ }
 ```
 
 Context augmentation (already declared by the seam):
@@ -281,6 +286,7 @@ gone; `session(id)` is new):
 | `session(id)` | the `CcSession` actor, or `undefined`. **A handle, not a value** — never put it in a tool result, never identity-compare it across a service access |
 | `accountInfo()` | the first live session's cached account; rejects `NO_LIVE_SESSION` when nothing is open (it never spawns a session to answer) |
 | `attachMirror(id, session, opts?)` | (Phase 3) mirrors a live session into a dsh session log; throws `UNKNOWN_SESSION` for an unregistered id. When the CC session closes the mirror is FINALIZED (a turn left open by a mid-turn death is closed as `aborted`/`disposed`) and then detached |
+| `attachAskTarget(id, target)` | (Phase 4) sets WHO answers that session's permission prompts, questions and plan reviews; returns a disposer; throws `UNKNOWN_SESSION` for an unregistered id. Prefer `open({ ask })` — see §4.4d |
 | `config` | fully resolved; safe to read |
 
 A consumer written against Phase 1 still compiles: nothing was removed. What
@@ -367,6 +373,8 @@ type CcErrorCode = 'NOT_IMPLEMENTED' | 'UNKNOWN_SESSION' | 'SESSION_LIMIT'
                  | 'NO_LIVE_SESSION'       // accountInfo() with an empty registry
                  | 'TIMEOUT'               // waitForResult(timeoutMs) elapsed; session untouched
                  | 'BACKEND_ERROR'         // the SDK could not start/drive the session; see `cause`
+                 | 'ASK_UNANSWERABLE'      // (Phase 4) an ask reached nobody and ask.fallback is 'error'
+                 | 'ASK_UNAVAILABLE'       // (Phase 4) the session was built without an ask channel
 
 class ClaudeCodeError extends HarnessError {              // HarnessError from @deepseek-ai/dsh-llm
   constructor(message: string, code: CcErrorCode, options?: ErrorOptions)
@@ -384,7 +392,8 @@ projection for anything crossing a tool boundary; this is a handle.
 class CcSession {
   readonly id: CcSessionId
   get status(): CcSessionStatus        // 'starting' -> 'idle' <-> 'running' -> 'closed'
-  get pendingAsks(): number            // 0 until Phase 4
+  get pendingAsks(): number            // asks awaiting an answer (Phase 4); 0 without an ask channel
+  get lastAskError(): ClaudeCodeError | undefined   // Phase 4, ask.fallback: 'error' only
   get capabilities(): readonly string[]        // from the LATEST system/init — feature-detect on these
   get initializeResult(): CcInitializeResult | undefined   // commands, models, account, output_style
   get account(): CcAccountData | undefined
@@ -399,6 +408,10 @@ class CcSession {
   onMessage(listener: CcMessageListener): () => void
   onSend(listener: CcSendListener): () => void   // Phase 3 — outgoing messages
   onClose(listener: () => void): () => void
+  // Phase 4:
+  attachAskTarget(target: CcAskTarget): () => void    // throws ASK_UNAVAILABLE with no ask channel
+  attachAskCallSite(site: CcAskCallSite): () => void  // the service wires the mirror in
+  onAskError(listener: (error: ClaudeCodeError) => void): () => void
   close(): Promise<void>               // idempotent
 }
 ```
@@ -614,6 +627,260 @@ step (it arrived after the turn closed, or the mirror never saw the call) is
 counted in `stats.ignored['tool-result:orphan']` and dropped — dsh's own
 invariants reject it anywhere else.
 
+### 4.4d The ask channel (Phase 4)
+
+Claude Code asks for three different things through ONE callback. The router
+sends each to the dsh seam that owns it:
+
+| `toolName` | dsh seam | section |
+|---|---|---|
+| `AskUserQuestion` | `ctx.userQuestions.ask()` | §4.2 |
+| `ExitPlanMode` | `ctx.userQuestions.ask()` with the `plan-review` intent | §4.3 |
+| anything else | `ctx.approval.request()` | §4.1 |
+
+```ts
+class CcAskRouter {
+  constructor(deps: CcAskRouterDeps)
+  readonly canUseTool: CcCanUseTool          // hand this to the SDK; ALWAYS resolves
+  get table(): CcAskTable
+  get pendingAsks(): number
+  get target(): CcAskTarget | undefined
+  attachTarget(target: CcAskTarget): () => void
+  attachCallSite(site: CcAskCallSite): () => void
+  onError(listener: (error: ClaudeCodeError) => void): () => void
+  settleAll(message?: string): number
+}
+
+interface CcAskRouterDeps {
+  readonly services: CcAskServices           // lazy ctx.get('approval') / ctx.get('userQuestions')
+  readonly config: ResolvedClaudeCodeConfig
+  readonly rules: CcAskRules
+  readonly table?: CcAskTable
+  readonly logger?: CcLogger
+  readonly callIdWaitMs?: number             // default 150
+  readonly callIdPollMs?: number             // default 10
+  readonly readPlanFile?: (path: string) => string | undefined
+}
+
+interface CcAskTarget {
+  readonly agent: Agent                      // @deepseek-ai/dsh-agent
+  readonly userQuestions?: CcUserQuestionsSeam   // override; else ctx.get('userQuestions')
+  readonly approval?: CcApprovalSeam             // override; else ctx.get('approval')
+  readonly delegated: boolean                // selects ask.delegatedTimeoutMs
+}
+```
+
+**Attaching a target.** `open({ cwd, ask: { agent, delegated } })` attaches it
+BEFORE the opening prompt is sent (that prompt is synchronous inside `open()`,
+so a target attached afterwards can miss the first tool call).
+`ctx.claudeCode.attachAskTarget(id, target)` is the after-the-fact seam.
+Phase 5 passes the delegating `exec.agent`; Phase 6 passes the CC-backed agent
+it registered.
+
+**Two seams, two failure postures.** Absent `approval` is **fail-closed**: the
+tool call is denied with an explanation, and no fallback policy can turn that
+into a grant. Absent `userQuestions` is a **routing failure**: the configured
+fallback answers it.
+
+#### The approval path (§4.1)
+
+| `ApprovalOutcome` | `PermissionResult` |
+|---|---|
+| `allowed-once` | `{ behavior: 'allow', updatedInput: input }` |
+| `rejected` | `{ behavior: 'deny', message: 'User rejected this action' }` |
+| `cancelled` | `{ behavior: 'deny', message: 'Request withdrawn' }` |
+| `unavailable` | the fallback policy |
+
+- **Allow ALWAYS carries `updatedInput`.** The allow-without-input path is
+  version-gated; nothing here relies on it.
+- `reason` is `opts.title` (the CLI's own pre-rendered sentence, delta S2) and
+  falls back to `describeCall(toolName, input)` — one bounded line, never the
+  whole input, because dsh's `ApprovalRequest` deliberately carries no arguments.
+- `policy: 'never'` arrives as `rejected`. That is a DECISION, not a routing
+  failure: the fallback never sees it.
+- **The open-turn guard.** `ctx.approval.request()` throws synchronously when
+  the agent's session has no open turn. The router catches it and denies with a
+  message naming the idle state — a rejected `canUseTool` promise hangs the
+  Claude Code session forever, with no park deadline.
+- **`updatedPermissions` is never echoed** (spike 4: the SDK persists nothing
+  from a headless callback). See the rule cache below.
+
+#### `callId` correlation (§4.4)
+
+`CcAskCallSite` is the mirror, narrowed to two questions:
+
+```ts
+interface CcAskCallSite {
+  hasEmittedCall(toolUseId: string): boolean
+  ensureToolCall(toolUseId: string, toolName: string, input: Record<string, unknown>): string
+}
+```
+
+The service wires the mirror in whenever one is attached. The router then:
+waits up to `callIdWaitMs` for the mirror to append the streamed `tool/call`;
+if it never does, **synthesizes** it (loudly) so the prompt refers to a call the
+UI has actually seen; and with **no mirror attached, sends no `callId` at all**
+— dsh's answerer back-scan then matches only callId-less asks, which is correct
+because there is no UI record to attach to.
+
+That wait is the only point at which the approval path yields, so it is the only
+point at which the ask can disappear underneath it. Two guards close that window
+(Stage 3):
+
+- **Withdrawn while correlating** — the wait ends the moment the ask's signal
+  aborts, and nothing is synthesized or asked. A phantom `tool/call` would put a
+  call Claude Code abandoned into the transcript, with an `approval/asked` pair
+  attached to it.
+- **Mirror detached while correlating** — if the call site was detached or
+  replaced during the wait, the request carries no `callId` rather than
+  appending to a dsh session nobody mirrors into any more.
+
+#### The questions path (§4.2)
+
+- `id` = the question TEXT, suffixed `' #2'`, `' #3'` on collision (§4.2.1); the
+  original text is kept for the answer key.
+- `header` passes through (capped at 64 chars); `options[].label`/`description`
+  pass through; `options[].preview` is dropped; `multiSelect` passes through.
+- Answers are read **positionally** (dsh's wire validator aligns
+  `answers[i].id` with `questions[i].id`); an out-of-order id is still resolved
+  by id, loudly, rather than misattributed.
+- `answers` is keyed by question **text**. Single-select joins with `', '`;
+  `custom` overrides `selected`. Multi-select yields an array, with `custom`
+  appended as one more choice (dsh permits both together, and dropping the
+  clicks would silently discard what the human chose).
+- A **skipped** question (no selection, no custom) is OMITTED from `answers`.
+- Success is `{ behavior: 'allow', updatedInput: { questions: input.questions, answers } }`
+  — the S4-verified encoding, with the original `questions` passed back unchanged.
+
+#### The plan path (§4.3)
+
+Copied verbatim from `@deepseek-ai/dsh-plan-mode`'s own convention:
+
+```ts
+{ id: 'plan-review', header: 'Plan review', question: 'Approve this plan?',
+  detail: <the plan markdown>,
+  options: [{ label: 'Approve' }, { label: 'Keep planning' }],
+  intent: { kind: 'plan-review', approve: 'Approve' } }
+```
+
+- **Plan probe order:** `input.plan` (the live-probed runtime field, delta S3,
+  accepted only when it is a **string** — it is untyped in the SDK's `.d.ts`, and
+  a human must never be asked to approve `"[object Object]"`), then
+  `input.planFilePath` read off disk. If neither yields text, `detail` is
+  OMITTED and `ask()` itself rejects `BAD_INTENT` — the honest outcome for a plan
+  we cannot show the reviewer.
+- **Approved iff** exactly one answer item has id `'plan-review'`,
+  `selected === ['Approve']`, and `custom === undefined`. Then
+  `{ behavior: 'allow', updatedInput: input }`.
+- Declined denies with the user's `custom` text as the message (so Claude
+  revises rather than guesses), else a generic keep-planning sentence.
+- `ASK_CANCELLED` is DISMISSED, not declined: deny with "Plan review
+  dismissed…", telling Claude to stay in plan mode and wait.
+- **`ctx.planMode` is deliberately not touched** (delta D5): Claude Code owns its
+  own plan state, and dsh's queued-flip semantics assume the dsh agent loop.
+
+#### The pending-ask table (§4.6)
+
+```ts
+class CcAskTable {
+  constructor(deps?: CcAskTableDeps)          // { logger?, retain? = 512, onSettle? }
+  get pendingCount(): number
+  pending(): readonly CcPendingAsk[]          // { requestId, toolName, startedAt }
+  run(spec: CcAskRunSpec, work: (signal: AbortSignal) => Promise<CcPermissionDecision>): Promise<CcPermissionDecision>
+  settleAll(message?: string): number
+}
+const ASK_WITHDRAWN_MESSAGE: 'Request withdrawn'
+const ASK_SESSION_CLOSED_MESSAGE: string
+```
+
+Keyed by the SDK `requestId` (delta S2). Four things settle an ask — the dsh
+answer, the SDK signal aborting (deny `'Request withdrawn'`, matching dsh's own
+`'cancelled'` semantics), the configured timeout, and session close. Settlement
+is once-only, so a late answer racing an abort is discarded exactly as dsh's
+approval seam discards it on its side.
+
+**Idempotency is a contract** (delta S12): `reinitialize()` and
+`pending_permission_requests` redeliver in-flight requests. A redelivered
+`requestId` returns the ORIGINAL settled decision, or attaches to the in-flight
+promise — it never opens a second dsh prompt. Settled decisions are retained up
+to `retain` and then evicted oldest-first. A redelivery also **arms its own
+`signal`** on the entry it joins: after a `reinitialize()` the newest delivery is
+the live transport, and only it can tell the ask it was withdrawn.
+
+The router keys the table on `requestId`, and falls back to `toolUse:<id>` (then
+to a per-router counter) if a delivery ever arrives without one — loudly. Two
+distinct tool calls sharing one table key would hand the second one the first
+one's answer, which is a permission grant nobody gave.
+
+**Timeouts:** `ask.delegatedTimeoutMs` when `target.delegated`, else
+`ask.timeoutMs` (**unset = no timer at all**, the interactive posture — not a
+zero-length one). A configured wait past the 32-bit `setTimeout` ceiling
+(2 147 483 647 ms) is clamped to it, because Node otherwise clamps it *down to
+1ms* and denies the prompt instantly. A throwing timeout policy is contained
+into a deny: an exception raised inside a timer callback cannot be caught by the
+caller and would leave the ask pending forever.
+`CcSession.close()` calls `settleAll()` FIRST (§5.4), before the query goes away.
+
+#### The fallback policy (§4.5)
+
+Applies to the FULL `UserQuestionError` taxonomy (delta D3:
+`DELEGATED_CALLER`, `CALLER_NOT_LIVE`, `NO_PROVIDER`, `ASK_ABORTED`,
+`ASK_CANCELLED`, `ASK_MISSING_AGENT`, `BAD_INTENT`, `EMPTY_QUESTIONS` —
+exported as `CC_ASK_ERROR_CODES`), to approval `'unavailable'`, and to timeouts.
+It never applies to a decision (`rejected`, `cancelled`).
+
+| `ask.fallback` | behaviour |
+|---|---|
+| `deny` (default) | deny with an explanation telling Claude to proceed on its best assumption and state it |
+| `first-option` | auto-answer each CLARIFYING question with `options[0]`, logged LOUDLY. **Permission prompts and plan reviews are denied instead** — their "first option" is a grant, and an unattended run must not award itself one |
+| `error` | deny with `interrupt: true` (delta S13) AND surface a typed `ClaudeCodeError` with code `ASK_UNANSWERABLE` on the session (`onAskError`, `lastAskError`) |
+
+#### The always-allow rule cache (spike 4)
+
+```ts
+class CcAskRules {
+  static forSession(config: ResolvedClaudeCodeConfig, cwd: string, logger?: CcLogger): CcAskRules
+  get path(): string
+  get enabled(): boolean
+  list(): readonly CcAskRule[]
+  allows(toolName: string, suggestions: readonly CcPermissionSuggestion[] | undefined): boolean
+  add(rule: CcAskRule): boolean
+  reload(): void
+}
+function resolveRuleCachePath(config: ResolvedClaudeCodeConfig, cwd: string): string
+const CC_RULE_FILE_VERSION: 1
+const CC_RULE_CACHE_DIR: '.dsh-claude-code'
+const CC_RULE_CACHE_FILE: 'always-allow.json'
+```
+
+On-disk format (`<cwd>/.dsh-claude-code/always-allow.json` by default;
+`ask.ruleCachePath` may be absolute, or relative to the session `cwd`):
+
+```json
+{ "version": 1, "rules": [ { "toolName": "Bash", "ruleContent": "npm test:*" } ] }
+```
+
+Consulted BEFORE any prompt, and deliberately conservative: it matches only when
+every rule of every `type: 'addRules'` + `behavior: 'allow'` +
+`destination: 'localSettings'` suggestion attached to THIS prompt is already
+stored, and names the tool being decided. A prompt forced by the user's own
+`permissions.ask` rule (`matchedAskRule`) is never short-circuited. A missing,
+unreadable, malformed or wrong-version file is an EMPTY cache plus a log line —
+the fail-closed direction of a permission cache is "prompt the human".
+`ask.persistAlwaysAllow: false` disables reads as well as writes.
+
+**Known limitation (write path).** dsh's approval vocabulary has no `'always'`
+outcome (delta D2: `allowed-once | rejected | cancelled | unavailable`), so no UI
+answer can currently ADD a rule. Entries come from `ask.rules` in configuration
+or programmatically via `CcAskRules.add()`. When dsh grows the outcome, the
+UI-driven path is one `add()` call away — nothing else here changes.
+
+**Audit caveat (§8.3).** Two paths reach a tool without a dsh prompt: a rule
+cache hit (logged), and the CLI's own safe-command classifier, which
+auto-approves things like `echo` BELOW `canUseTool` entirely. The dsh approval
+log is a record of what dsh was ASKED, never a complete record of what Claude
+Code ran.
+
 ### 4.5 Configuration
 
 ```ts
@@ -649,6 +916,11 @@ interface CcAskConfig {
   readonly fallback?: AskFallback
   readonly persistAlwaysAllow?: boolean
   readonly ruleCachePath?: string
+  readonly rules?: CcAskRuleConfig[]                 // preseeded always-allow rules (Phase 4)
+}
+interface CcAskRuleConfig {
+  readonly toolName: string                          // 'Bash', 'Read', …
+  readonly ruleContent?: string                      // 'npm test:*'; absent = the whole tool
 }
 interface CcLimitsConfig {
   readonly maxConcurrentSessions?: number
@@ -677,6 +949,7 @@ interface ResolvedClaudeCodeConfig {
     readonly fallback: AskFallback               // 'deny'
     readonly persistAlwaysAllow: boolean         // true
     readonly ruleCachePath?: string
+    readonly rules: readonly CcAskRuleConfig[]   // []
   }
   readonly limits: {
     readonly maxConcurrentSessions: number       // 4
@@ -695,7 +968,17 @@ reads session policy from `ctx.claudeCode.config`.
 - **`ctx.claudeCode.config.ask.persistAlwaysAllow` is an integration-owned rule
   cache, not SDK persistence.** A headless `canUseTool` never writes
   `settings.local.json`. Never surface it to the model as "saved to your Claude
-  Code settings".
+  Code settings". Phase 4 implements it as `CcAskRules` over
+  `<cwd>/.dsh-claude-code/always-allow.json` (§4.4d), consulted before every
+  prompt and written only by `add()` / `ask.rules` — dsh has no `'always'`
+  outcome yet.
+- **A dsh approval log is not a complete record of what Claude Code ran.** The
+  CLI's safe-command classifier auto-approves trivial commands below
+  `canUseTool`, and a rule-cache hit skips the prompt by design. Say "approved
+  through dsh", never "every tool call was approved".
+- **`canUseTool` must never reject and never return `null`.** Both leave the CLI
+  waiting forever — there is no park deadline. Everything Phase 4 does is
+  arranged around that one fact.
 - **`settingSources` omitted at the SDK boundary loads ALL sources.** The
   resolved config therefore always carries an explicit list (`[]` by default).
 - **dsh mints every session id** (bare UUID), including fork ids. The spec's
@@ -773,6 +1056,73 @@ an offline regression test, so none of them can come back silently.
    from teardown, i.e. leaking its subprocess past disposal, with two queries on
    one transcript. **Fix:** `open()` refuses it with the new `SESSION_EXISTS`
    code; forking that session is still allowed and still mints a fresh id.
+
+### Phase 4 additions and corrections
+
+12. **`CcSession.pendingAsks` is real now** (§4.4b said "0 until Phase 4"), and
+    `CcSessionSnapshot.pendingAsks` follows it. `close()` drains the table before
+    tearing down the query, so a pending ask always resolves — as a deny.
+13. **`CcSessionDeps` gained `asks`**, and `canUseTool` precedence is now
+    *explicit dep → ask channel → fail-closed deny*. A session built with
+    neither still denies every tool call with an explanation (the message no
+    longer mentions Phase 4).
+14. **`CcMirror` gained `hasEmittedCall()` and `ensureToolCall()`.** `callIds` /
+    `callIdFor()` mint on demand and therefore cannot answer "has the UI seen
+    this call?", which is the question §4.4 actually asks. `#emitted` tracks
+    appended `tool/call`s for the session's whole life (unlike the per-step
+    pending table).
+15. **`CcPermissionRequest` gained `suggestions` and `matchedAskRule`**, and
+    `backend.ts` gained `CcPermissionSuggestion` / `CcPermissionRuleValue`. They
+    are read-only inputs: `updatedPermissions` is never sent back.
+16. **New dependencies** (peer + dev, exact `0.1.0-rc.7`):
+    `@deepseek-ai/dsh-agent`, `@deepseek-ai/dsh-user-approval`,
+    `@deepseek-ai/dsh-user-questions`. The seam still mounts with `inject: []`
+    and reads both interaction seams opportunistically through `ctx.get(...)`,
+    resolved LAZILY on every ask (a captured cordis proxy outlives its fiber).
+
+### Defects the Phase 4 orderings probe (Stage 3) found
+
+Six, all in the ask channel, all with an offline regression test in
+`packages/claude-code/tests/ask-orderings.spec.ts` (plus two in the questions and
+rules specs). The first two are the serious ones: they break the invariant the
+whole channel exists to hold.
+
+17. **A throwing timeout policy escaped as an uncaught exception AND hung the
+    ask.** `CcAskTable` called `spec.onTimeout()` directly inside the
+    `setTimeout` callback. An exception there cannot be caught by the caller —
+    it reaches `process.on('uncaughtException')` — and the ask it was supposed
+    to settle stayed pending forever, which is the one failure Claude Code
+    cannot survive. **Fix:** the timer callback contains the policy and settles
+    with a deny naming the failure.
+18. **A redelivery ignored its own abort signal.** The table armed only the
+    FIRST delivery's `signal`. After a `reinitialize()` the redelivered request
+    carries a fresh signal on the live transport, so a genuine withdrawal was
+    never observed and the ask waited for a timeout that an interactive session
+    does not have. **Fix:** `run()` arms every delivery's signal on the entry it
+    joins (deduplicated by signal identity, torn down together).
+19. **A withdrawn or timed-out ask still synthesized a `tool/call` and asked
+    dsh.** The §4.4 correlation wait was the only yield point on the approval
+    path and it watched neither the ask's signal nor the call site, so an ask
+    that went away mid-wait still appended a `tool/call` for a call Claude Code
+    had abandoned, then an `approval/asked` + `approval/decided` pair for a
+    decision nobody would read. **Fix:** the wait ends on abort; abort or a
+    detached/replaced mirror suppresses the synthesis and the request.
+20. **An id-less delivery would have folded every ask onto one table entry.**
+    `requestId` is typed as required and delta S2 confirms the CLI sends it, but
+    a missing or empty one keyed every ask identically — the second tool call
+    would have been answered with the first one's decision, i.e. a grant nobody
+    gave. **Fix:** `askKey()` falls back to `toolUse:<id>` then to a per-router
+    counter, loudly, trading redelivery idempotency for correctness.
+21. **A configured wait past 2 147 483 647 ms denied instantly.** `setTimeout`
+    clamps an out-of-range delay DOWN to 1ms (with `TimeoutOverflowWarning`), so
+    an over-large `ask.delegatedTimeoutMs` produced the opposite of what it
+    asked for. **Fix:** clamp to the ceiling, and log it.
+22. **Two smaller ones.** `readPlan()` accepted a non-string `input.plan` and
+    would have shown a reviewer `"[object Object]"` as the plan (the field is
+    untyped in the SDK's `.d.ts`) — it now requires a string and falls through
+    to `planFilePath`. And `CcAskRules.add()` rewrote its own possibly-stale
+    in-memory view, so a second session sharing the store could delete a grant
+    the first had just written — it now re-reads and merges before writing.
 
 ## 6. Verification before you report
 
@@ -852,6 +1202,22 @@ each driving a REAL Claude Code subprocess through the real backend and a real
   proven by the session adopting the pool's pre-minted `sessionId` (frozen at
   `startup()`, so it could not have come from a cold `query()`), and the drain
   cap by a counting backend wrapper — neither reaches into private state.
+- **Phase 4 added four ask files** (`ask-approval`, `ask-question`, `ask-plan`,
+  `ask-timeout-fallback`), taking the suite to sixteen files / twenty-five tests.
+  They mount the full real composition (`SessionStore` + `AgentRegistry` +
+  `UserQuestionService` + `ApprovalService` + `ClaudeCodeService`) and never
+  override `deps.canUseTool`, so every one of them exercises the production
+  `CcAskRouter`. Assertions read the deterministic `tool/result` text CC's own
+  permission machinery writes back to the model, not the model's paraphrase of
+  it. `mountLiveWithAsk` / `registerLiveRootAgent` (in `tests/live/helpers.ts`)
+  pass the agent's own dsh session as BOTH audit log and mirror target, which is
+  what makes `approval/asked.data.callId` directly comparable to the mirrored
+  `tool/call.data.callId`.
+- **Running the live suite rewrites three fixtures.**
+  `record-fixtures.live.spec.ts` re-records `plain-text.json`, `steer.json` and
+  `tool-call.json` on every live run, so `git status` shows them modified
+  afterwards. That is the recorder working; `mirror-golden.spec.ts` is the check
+  that the projection is still deterministic against the new recording.
 
 ### Still deferred (do not build now)
 

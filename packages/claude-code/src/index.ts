@@ -15,6 +15,35 @@
  * @module @deepseek-ai/dsh-claude-code
  */
 
+export {
+  CC_ASK_USER_QUESTION, CC_CANCELLED_MESSAGE, CC_EXIT_PLAN_MODE, CC_PLAN_APPROVE_LABEL,
+  CC_PLAN_DECLINE_LABEL, CC_PLAN_REVIEW_ID, CC_REJECTED_MESSAGE, CcAskRouter, describeCall,
+  mapAnswers, mapQuestions,
+} from './ask/router.ts'
+export type { CcAskRouterDeps, CcMappedQuestion } from './ask/router.ts'
+
+export { applyAskFallback, describeReason } from './ask/fallback.ts'
+export type {
+  CcAskFallbackInput, CcAskFallbackReason, CcAskFallbackResult, CcAskKind,
+} from './ask/fallback.ts'
+
+export {
+  CC_RULE_CACHE_DIR, CC_RULE_CACHE_FILE, CC_RULE_FILE_VERSION, CcAskRules, resolveRuleCachePath,
+} from './ask/rules.ts'
+export type { CcAskRule, CcAskRuleFile, CcAskRulesDeps } from './ask/rules.ts'
+
+export {
+  ASK_SESSION_CLOSED_MESSAGE, ASK_WITHDRAWN_MESSAGE, CcAskTable,
+} from './ask/table.ts'
+export type {
+  CcAskRunSpec, CcAskSettleCause, CcAskTableDeps, CcPendingAsk,
+} from './ask/table.ts'
+
+export { askErrorCode, CC_ASK_ERROR_CODES } from './ask/types.ts'
+export type {
+  CcApprovalSeam, CcAskCallSite, CcAskServices, CcAskTarget, CcUserQuestionsSeam,
+} from './ask/types.ts'
+
 export { realBackend } from './backend.ts'
 export type {
   CcAccountData,
@@ -25,6 +54,8 @@ export type {
   CcModelInfoEntry,
   CcPermissionDecision,
   CcPermissionRequest,
+  CcPermissionRuleValue,
+  CcPermissionSuggestion,
   CcQueryOptions,
   CcSdkMessage,
   CcSdkUserMessage,
@@ -43,6 +74,7 @@ export {
 } from './config.ts'
 export type {
   CcAskConfig,
+  CcAskRuleConfig,
   CcDefaultsConfig,
   CcLimitsConfig,
   ClaudeCodeConfig,
@@ -68,6 +100,7 @@ export type { CcWarmLease, WarmPoolDeps } from './prewarm.ts'
 
 export { buildSessionEnv, CcSession, resolveQueryOptions } from './session.ts'
 export type {
+  CcAskChannel,
   CcInterruptOptions,
   CcInterruptOutcome,
   CcMessageEnvelope,

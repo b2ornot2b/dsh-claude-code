@@ -17,6 +17,9 @@ import type z from '@deepseek-ai/schemastery'
 
 import type { Session as DshSession } from '@deepseek-ai/dsh-session'
 
+import { CcAskRouter } from './ask/router.ts'
+import { CcAskRules } from './ask/rules.ts'
+import type { CcAskServices, CcAskTarget } from './ask/types.ts'
 import { realBackend } from './backend.ts'
 import type { CcCanUseTool, QueryBackend } from './backend.ts'
 import { Config as ConfigSchema, resolveClaudeCodeConfig } from './config.ts'
@@ -74,7 +77,11 @@ interface CcSessionRecord {
 export interface ClaudeCodeServiceDeps {
   /** The SDK boundary. Defaults to {@link realBackend}; unit tests inject a fake. */
   readonly backend?: QueryBackend
-  /** The permission router. Phase 4 installs the real one; omitted means fail-closed deny. */
+  /**
+   * An explicit permission callback, overriding the per-session ask router
+   * (tests script decisions with it). Omitted, every session gets its own
+   * `CcAskRouter`.
+   */
   readonly canUseTool?: CcCanUseTool
   /**
    * Resolve the API key referenced by `config.apiKeyRef` under `auth: 'api-key'`.
@@ -206,9 +213,20 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
     const id = lease?.sessionId
       ?? (options.resume !== undefined && options.fork !== true ? options.resume : mintedId)
 
+    // One ask channel per session: the SDK's `requestId` namespace is the
+    // session's control channel, and `settleAll()` is the session's close path.
+    const router = new CcAskRouter({
+      services: this.askServices(),
+      config: this.config,
+      rules: CcAskRules.forSession(this.config, options.cwd, this.log),
+      logger: this.log,
+    })
     const session = new CcSession(
       { id, ...shape },
-      { ...this.sessionDeps(), ...(lease === undefined ? {} : { warm: lease }) })
+      { ...this.sessionDeps(), asks: router, ...(lease === undefined ? {} : { warm: lease }) })
+    // Before `open()`, so the first tool call of the opening prompt already has
+    // a human behind it.
+    if (options.ask !== undefined) session.attachAskTarget(options.ask)
 
     const record: CcSessionRecord = {
       id,
@@ -352,6 +370,38 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
   }
 
   /**
+   * Attach (or replace) who answers one session's asks (§4.5).
+   *
+   * @param id - the shared dsh/CC session id.
+   * @param target - the dsh agent and its optional seam overrides.
+   * @returns a disposer detaching exactly this target.
+   * @throws {ClaudeCodeError} code `UNKNOWN_SESSION` when the id is not registered here.
+   */
+  attachAskTarget(id: CcSessionId, target: CcAskTarget): () => void {
+    const actor = this.sessions.get(id)?.session
+    if (actor === undefined) {
+      throw new ClaudeCodeError(
+        `claude-code: no session ${id} is registered in this context`, 'UNKNOWN_SESSION')
+    }
+    return actor.attachAskTarget(target)
+  }
+
+  /**
+   * The two optional dsh seams, resolved LAZILY on every ask.
+   *
+   * Read through `ctx.get(...)` at ask time rather than captured: a service may
+   * mount or unload after this session opened, and cordis hands out a fresh
+   * traceable proxy per access — a stored one outlives the fiber that made it.
+   * @returns the resolvers the ask router consults.
+   */
+  private askServices(): CcAskServices {
+    return {
+      approval: () => this.ctx.get('approval'),
+      userQuestions: () => this.ctx.get('userQuestions'),
+    }
+  }
+
+  /**
    * Attach one mirror and bind its lifetime to the Claude Code session's.
    *
    * The mirror is handed the ACTOR, which it only ever reads through
@@ -364,12 +414,16 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
    */
   private mirror(actor: CcSession, session: DshSession, options: CcMirrorOptions): CcMirrorHandle {
     const handle = attachMirror(actor, session, { logger: this.log, ...options })
+    // §4.4: an approval prompt must reference a `tool/call` the UI has already
+    // seen. The mirror is the only thing that knows whether it has.
+    const detachCallSite = actor.attachAskCallSite(handle.mirror)
     // A mirror outliving its session would hold a listener on a dead actor and
     // keep appending nothing forever; disposal is owned here, not by the caller.
     // `finalize()` first: a session closed MID-TURN never emits the result that
     // would have closed the dsh turn, and a log with a dangling `turn/start`
     // can never be appended to again (dsh refuses a second open turn).
     actor.onClose(() => {
+      detachCallSite()
       handle.mirror.finalize()
       handle.dispose()
     })

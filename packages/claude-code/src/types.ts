@@ -14,6 +14,7 @@ import { HarnessError } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type { Session as DshSession } from '@deepseek-ai/dsh-session'
 
+import type { CcAskTarget } from './ask/types.ts'
 import type { CcMirrorHandle, CcMirrorOptions } from './mirror.ts'
 
 /**
@@ -199,6 +200,16 @@ export interface CcOpenOptions {
    * automatically when the session closes.
    */
   readonly mirror?: CcMirrorAttachment
+  /**
+   * Who answers this session's permission prompts, clarifying questions and
+   * plan reviews (§4). Attached BEFORE the first prompt, so the very first tool
+   * call can be decided by a human instead of failing closed.
+   *
+   * Omitted, the session still runs — and denies every tool call it is asked
+   * about, with an explanation. That is the correct posture for a session
+   * nobody is watching.
+   */
+  readonly ask?: CcAskTarget
 }
 
 /**
@@ -270,6 +281,18 @@ export type CcErrorCode =
   | 'TIMEOUT'
   /** The Claude Agent SDK failed to start or drive the session; `cause` carries the original error. */
   | 'BACKEND_ERROR'
+  /**
+   * An ask could not reach a human and `ask.fallback` is `'error'`: the tool
+   * call was denied with `interrupt: true` and this is the failure the owning
+   * consumer reports. Never thrown into `canUseTool` — a rejected permission
+   * promise hangs the Claude Code session forever.
+   */
+  | 'ASK_UNANSWERABLE'
+  /**
+   * The session was constructed without a dsh ask channel, so it has nothing to
+   * attach an ask target (or a call site) to.
+   */
+  | 'ASK_UNAVAILABLE'
 
 /** Error taxonomy for the Claude Code seam. */
 export class ClaudeCodeError extends HarnessError {
@@ -331,6 +354,19 @@ export interface ClaudeCode {
    * @throws {ClaudeCodeError} code `UNKNOWN_SESSION` when the id is not registered.
    */
   attachMirror(id: CcSessionId, session: DshSession, options?: CcMirrorOptions): CcMirrorHandle
+  /**
+   * Attach (or replace) who answers one session's asks (§4.5).
+   *
+   * Prefer `open({ ask })` when the session is opened with a prompt: that
+   * prompt is sent synchronously inside `open()`, so a target attached
+   * afterwards can miss the first tool call and see it denied fail-closed.
+   *
+   * @param id - the shared dsh/CC session id.
+   * @param target - the dsh agent and its optional seam overrides.
+   * @returns a disposer detaching exactly this target.
+   * @throws {ClaudeCodeError} code `UNKNOWN_SESSION` when the id is not registered.
+   */
+  attachAskTarget(id: CcSessionId, target: CcAskTarget): () => void
   /**
    * Which authentication is live for this composition.
    * @returns the account projection.
