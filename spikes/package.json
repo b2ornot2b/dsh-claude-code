@@ -1,0 +1,9 @@
+{
+  "name": "dsh-claude-code-spikes",
+  "private": true,
+  "type": "module",
+  "description": "Phase 0 spike probes for the dsh-claude-code integration. Not shipped.",
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.233"
+  }
+}

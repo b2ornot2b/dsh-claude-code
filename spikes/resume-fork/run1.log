@@ -1,0 +1,46 @@
+=== Session A: minted sessionId = 1a30d82c-3134-49cc-be0e-8bd00b016aa1 ===
+[A] INIT session_id= 1a30d82c-3134-49cc-be0e-8bd00b016aa1
+[A] ASSISTANT> OK
+[A] RESULT session_id= 1a30d82c-3134-49cc-be0e-8bd00b016aa1 | subtype= success | result= OK
+=== Session B: resume 1a30d82c-3134-49cc-be0e-8bd00b016aa1 ===
+[B] INIT session_id= 1a30d82c-3134-49cc-be0e-8bd00b016aa1
+[B] ASSISTANT> PLUM
+[B] RESULT session_id= 1a30d82c-3134-49cc-be0e-8bd00b016aa1 | subtype= success | result= PLUM
+=== Session C: fork resume 1a30d82c-3134-49cc-be0e-8bd00b016aa1 forkSession=true sessionId= 4ec8b4ff-979e-4b71-be7c-a106c9ae075b ===
+[C] INIT session_id= 4ec8b4ff-979e-4b71-be7c-a106c9ae075b
+[C] ASSISTANT> PLUM
+[C] RESULT session_id= 4ec8b4ff-979e-4b71-be7c-a106c9ae075b | subtype= success | result= PLUM
+=== Session D: resume 1a30d82c-3134-49cc-be0e-8bd00b016aa1 again (sanity) ===
+[D] INIT session_id= 1a30d82c-3134-49cc-be0e-8bd00b016aa1
+[D] ASSISTANT> PLUM
+[D] RESULT session_id= 1a30d82c-3134-49cc-be0e-8bd00b016aa1 | subtype= success | result= PLUM
+
+=== SUMMARY ===
+{
+  "A": {
+    "label": "A",
+    "initSessionId": "1a30d82c-3134-49cc-be0e-8bd00b016aa1",
+    "resultSessionId": "1a30d82c-3134-49cc-be0e-8bd00b016aa1",
+    "resultText": "OK"
+  },
+  "A_mintedUuid": "1a30d82c-3134-49cc-be0e-8bd00b016aa1",
+  "B": {
+    "label": "B",
+    "initSessionId": "1a30d82c-3134-49cc-be0e-8bd00b016aa1",
+    "resultSessionId": "1a30d82c-3134-49cc-be0e-8bd00b016aa1",
+    "resultText": "PLUM"
+  },
+  "C": {
+    "label": "C",
+    "initSessionId": "4ec8b4ff-979e-4b71-be7c-a106c9ae075b",
+    "resultSessionId": "4ec8b4ff-979e-4b71-be7c-a106c9ae075b",
+    "resultText": "PLUM"
+  },
+  "C_mintedUuid": "4ec8b4ff-979e-4b71-be7c-a106c9ae075b",
+  "D": {
+    "label": "D",
+    "initSessionId": "1a30d82c-3134-49cc-be0e-8bd00b016aa1",
+    "resultSessionId": "1a30d82c-3134-49cc-be0e-8bd00b016aa1",
+    "resultText": "PLUM"
+  }
+}

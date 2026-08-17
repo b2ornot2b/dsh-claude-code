@@ -185,6 +185,107 @@ Each is a ~30-line probe script (pattern in scratchpad `sdk-probe/`), run before
 
 ---
 
+## 5a. Phase 0 spike results (2026-08-17, all seven complete)
+
+Run as a 7-agent workflow; probe scripts and logs live under `spikes/` (each spike dir has
+`probe.mjs` + run logs; composition has `spike.mjs`, `spike-loader.mjs`, `cordis.yml`,
+`typed.ts`). All verdicts **confirmed**. Design consequences below are folded into the phases.
+
+### Spike 1 — resume/fork: dsh's id wins everywhere
+
+`options.sessionId` (caller-minted UUID) is honored for fresh sessions, resume keeps the same
+id, and **`resume + forkSession: true + sessionId: <fresh uuid>` honors OUR uuid for the fork**
+— history carries over and the source session is untouched (verified by re-resuming it).
+**Spec §8.2 is reversed:** we never let CC mint a fork id; dsh mints, passes it, done. No id
+mapping anywhere.
+
+### Spike 2 — steering: two real modes, neither is token-level steering
+
+- Plain send mid-turn = **next-turn queueing**: turn 1 completes fully, message runs as its own
+  turn. This is dsh `followup()`.
+- `priority: 'now'` = **abort-and-refold**: turn 1 is killed (emits an
+  `error_during_execution` result with empty text), then ONE fresh turn runs both instructions
+  together. This is the closest available `steer()` — but the mirror must swallow the error
+  result as an internal artifact, and turn-1 tokens are re-paid.
+- `priority: 'next'/'later'` untested (follow-up if needed).
+
+### Spike 3 — interrupt receipt: works; cancel_queued is an SDK gap
+
+- `interrupt()` receipt is exact and race-free: `{ still_queued: [uuid2, uuid3] }`, no strays.
+- **Coalescing:** N still-queued messages then run as ONE turn with ONE result — never assume
+  1:1 uuid→result.
+- A **fresh `system/init` message** is emitted after an interrupted turn — handle >1 init per
+  session (re-cache capabilities, don't re-run open logic).
+- The CLI advertises `interrupt_cancel_queued_v1` but **the public SDK cannot drive it**:
+  `interrupt()` takes no args and no `cancelAsyncMessage()` exists in 0.3.233. So
+  `claude_code_cancel(keep_queued: false)` is implemented at OUR layer (interrupt, then treat
+  still_queued uuids as cancelled in the mirrored inbox and never re-deliver) — with a tracked
+  TODO to adopt the native path when the SDK exposes it.
+
+### Spike 4 — "always allow" persistence: the SDK does NOT write it; own it ourselves
+
+- `suggestions` arrive as expected (3 entries; the `addRules` one has
+  `destination: 'localSettings'`), but echoing `updatedPermissions` from a headless
+  `canUseTool` **never wrote `.claude/settings.local.json`** — with `settingSources: []` OR
+  `['local']`. The disk write is the interactive TUI's job, not part of `query()`'s contract.
+- **Design change to spec §4.1/§10:** `persistAlwaysAllow` becomes an integration-owned rule
+  cache (our own JSON store consulted inside `canUseTool` before prompting), keeping
+  `settingSources: []` isolation intact. Do not ship `settingSources: ['local']` for this.
+- Also: the built-in safe-command classifier auto-approves things like `echo` **below** the
+  callback — audit/logging must not claim every tool call passed through dsh approval.
+
+### Spike 5 — prewarm: ~300ms init win, callback-safe, no orphans
+
+`startup()` costs ~305–325ms once; a warm `query()` reaches init in ~8ms vs ~300ms cold. First
+*token* latency is unchanged (~2s model roundtrip dominates). `canUseTool` routes identically
+on warm queries; `warm.close()` leaves no orphan process. Keep `prewarm: true` default for
+interactive compositions; it's pointless for batch. WarmQuery is single-use — pool one handle
+per pending session slot.
+
+### Spike 6 — partial messages: mapping confirmed, two surprises
+
+- Envelope: `{ type:'stream_event', event: <Anthropic raw stream event>, parent_tool_use_id,
+  ttft_ms? }`; `event.index` is a stable per-turn block index → use directly as the dsh chunk
+  index. Mapping: `content_block_start(type)` → block-start (`thinking`→reasoning);
+  `text_delta`→text-delta; `thinking_delta`→reasoning-delta; `signature_delta`→fold into
+  reasoning metadata; `message_delta.stop_reason` → terminal chunk.
+- **Surprise 1:** `SDKAssistantMessage` arrives **multiple times per turn** (one per completed
+  block, same `message.id`) — it is a block-completion checkpoint, not the final message.
+  Accumulate from stream events; merge assistant messages by id if used at all.
+- **Surprise 2:** haiku emitted a thinking block with no thinking config, while sonnet with
+  explicit thinking config emitted none — treat reasoning blocks as always-optional in both
+  directions.
+- Not yet observed: `parent_tool_use_id != null` (tool-use/subagent streaming) — cover in
+  Phase 3 with a recorded tool-call transcript.
+
+### Spike 7 — out-of-tree composition: **GATE PASSES**
+
+- `@deepseek-ai/cordis@4.0.1` + `dsh-*@0.1.0-rc.7` install clean (zero peer warnings, 24
+  packages) and boot both ways: plain `new Context()` + `ctx.plugin()`, and **Loader +
+  `cordis.yml`** (recommended; needs only `cordis-plugin-loader/include/group`, NOT
+  `dsh-app-boot`). `tsc --noEmit` passes with `skipLibCheck: false` — Context augmentations
+  land, `ctx.approval`/`ctx.userQuestions`/`ctx.sessions` fully typed.
+- All three seam checks pass out-of-tree: userQuestions round trip (+ `NO_PROVIDER` fail-closed
+  after disposer, `CALLER_NOT_LIVE` for unregistered agents), approval round trip with real
+  `SessionStore` session + minimal `{id, session, ctx}` agent via `agents.register()`
+  (`approval/asked`+`approval/decided` appended, exact agent object delivered to answerer),
+  and the open-turn guard (throws, appends nothing). Policy fold (`'never'` → deterministic
+  `rejected`) also works.
+- **rc.5 was never published** — rc.7 is the only option and matched the checkout's API docs
+  exactly in everything exercised. Pin exact.
+- **New trap found:** cordis 4 returns a fresh "traceable" Proxy per service access —
+  `ctx.get('approval') !== ctx.approval`, and even `ctx.get(k) !== ctx.get(k)`; passing a
+  proxy/Context to `util.inspect`/assert throws a misleading `cannot get property "href"
+  without inject`. House rules: never identity-compare services, unwrap via
+  `Symbol.for('cordis.original')` first, never log/inspect contexts. Add a CI guard asserting
+  a single cordis copy (resolve path + `Service.prototype` identity from every dsh dep).
+- Minimal live Agent needs **no agent loop and no LLM**: `agents.register()` on a
+  hand-constructed agent satisfies both seams — keeps our test harness cheap and offline.
+
+**Phase 0 exit decision: out-of-tree development confirmed. Follow-up spikes deferred into
+phases:** tool-use partial streaming (Phase 3), `priority:'next'/'later'` (Phase 2, only if
+needed), scoped per-agent answerers via `dsh-scope` + `dsh-agent-loop` composability (Phase 6).
+
 ## 6. Implementation plan (revised from spec §11)
 
 Development in **this repo**, pinned: `@anthropic-ai/claude-agent-sdk@0.3.233` (exact),
