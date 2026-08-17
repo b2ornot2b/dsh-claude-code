@@ -1,0 +1,15 @@
+# Minimal out-of-tree composition: the four seams this spike exercises,
+# expressed the way the harness examples express a composition.
+- id: sessions
+  name: '@deepseek-ai/dsh-session'
+
+- id: agents
+  name: '@deepseek-ai/dsh-agent'
+
+- id: user-questions
+  name: '@deepseek-ai/dsh-user-questions'
+
+- id: approval
+  name: '@deepseek-ai/dsh-user-approval'
+  config:
+    policy: ask
