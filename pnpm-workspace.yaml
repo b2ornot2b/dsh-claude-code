@@ -1,0 +1,17 @@
+# Workspace packages. `spikes/` is deliberately EXCLUDED: each spike is an
+# independent npm project pinned to its own probe dependencies (Phase 0), and
+# folding it into the workspace would let pnpm hoist a second copy of
+# @deepseek-ai/cordis into the tree (two cordis copies break service
+# resolution — see docs/spec-review-and-plan.md §3 gotcha 15).
+packages:
+  - 'packages/*'
+
+# The pins this integration is built against are deliberately recent and
+# verified by the Phase 0 spikes (cordis 4.0.1, every dsh-* at 0.1.0-rc.7,
+# claude-agent-sdk 0.3.233). pnpm's default supply-chain quarantine
+# (minimumReleaseAge) would otherwise refuse them; the exemption is scoped to
+# exactly the two publishers we pin exactly, so every other dependency keeps
+# the default cooling-off window.
+minimumReleaseAgeExclude:
+  - '@deepseek-ai/*'
+  - '@anthropic-ai/*'

@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  // Ambient declarations every project needs. `files` is inherited by extending
+  // configs even when they override `include`, which is exactly what carries the
+  // Claude Agent SDK's missing `HeadersInit` declaration into every build.
+  "files": ["./types/sdk-dom-shim.d.ts"],
+  "compilerOptions": {
+    "target": "es2023",
+    "lib": ["es2023"],
+
+    // NodeNext everywhere: the published @deepseek-ai/dsh-* packages ship
+    // NodeNext-resolvable types, and every composition (Loader + cordis.yml)
+    // runs on plain Node ESM.
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+
+    // In-package relative imports carry explicit `.ts` specifiers (harness
+    // convention); the compiler rewrites them to `.js` on emit and leaves
+    // `.ts` in declarations, which NodeNext consumers resolve to the sibling
+    // `.d.ts`.
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
+
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "composite": true,
+    "removeComments": false,
+
+    // Non-negotiable (docs/spec-review-and-plan.md §6, harness parity):
+    // the Phase 0 composition spike proved the published .d.ts surface passes
+    // with skipLibCheck OFF, so we keep the SDK and dsh type surfaces honest.
+    "skipLibCheck": false,
+    "strict": true,
+    "exactOptionalPropertyTypes": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitReturns": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": false,
+    "useDefineForClassFields": true,
+    "forceConsistentCasingInFileNames": true,
+
+    "types": ["node"],
+
+    // Source plane: workspace imports resolve to `src`, never to a built
+    // `lib/` (a stale artifact there would load a SECOND copy of a module
+    // singleton). vitest reads this same file through vite-tsconfig-paths.
+    "baseUrl": ".",
+    "paths": {
+      "@deepseek-ai/dsh-claude-code": ["./packages/claude-code/src/index.ts"],
+      "@deepseek-ai/dsh-tool-claude-code": ["./packages/tool-claude-code/src/index.ts"],
+      "@deepseek-ai/dsh-claude-code-agent": ["./packages/claude-code-agent/src/index.ts"]
+    }
+  }
+}
