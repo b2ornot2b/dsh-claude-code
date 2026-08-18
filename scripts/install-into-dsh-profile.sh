@@ -63,6 +63,23 @@ SDK="$REPO/packages/claude-code/node_modules/@anthropic-ai/claude-agent-sdk"
 mkdir -p "$NM/@anthropic-ai"
 ln -sfn "$SDK" "$NM/@anthropic-ai/claude-agent-sdk"
 
+# A profile patch may be a DEPLOYED ARTIFACT rather than a source of truth --
+# e.g. b2infra's dsh-deploy does `install etc/dsh/cordis.patch.yml -> the
+# profile`, so anything written here is silently reverted on the next deploy
+# (and the daemon restarts believing it composed your rows). Detect that and
+# refuse to edit the copy: the rows belong in the upstream source.
+if head -5 "$PATCH" 2>/dev/null | grep -qiE "deployed to .*profiles"; then
+  echo
+  echo "!! $PATCH is a DEPLOYED ARTIFACT (its header says so)."
+  echo "   Package files are installed, but the rows must go in the SOURCE this"
+  echo "   file is deployed from, or the next deploy reverts them. Add:"
+  echo
+  sed -n "/$MARK_BEGIN/,/$MARK_END/p" "$REPO/scripts/rows.snippet.yml" 2>/dev/null || cat "$REPO/scripts/rows.snippet.yml"
+  echo
+  echo "   then re-deploy (b2infra: sudo launchd/bin/dsh-deploy) and restart dsh."
+  exit 2
+fi
+
 echo "==> patching $PATCH"
 touch "$PATCH"
 if grep -qF "$MARK_BEGIN" "$PATCH"; then

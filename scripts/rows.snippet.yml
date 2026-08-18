@@ -1,0 +1,30 @@
+# Compose rows for the dsh-claude-code integration. Append to a dsh profile's
+# cordis.patch.yml (or, when that file is deployed from elsewhere, to its
+# source). New rows MUST sit under `insert:` — a bare id+name row is an
+# OVERRIDE of an existing entry and is skipped with `patch: entry ... not found`.
+#
+# The packages themselves are placed in $DSH_HOME/profiles/node_modules by
+# scripts/install-into-dsh-profile.sh; re-run it after every rebuild, since it
+# copies lib/ rather than linking it (a symlink would resolve cordis and the
+# dsh-* peers back to this repo's own tree — a second module singleton, which
+# breaks cordis service resolution).
+#
+# settingSources: [] is deliberate isolation. The SDK loads ALL filesystem
+# settings when the key is OMITTED, which pulls the operator's global CLAUDE.md
+# into every delegated session. It does not affect auth: credentials are not a
+# setting source.
+- insert:
+    - id: claude-code
+      name: '@deepseek-ai/dsh-claude-code'
+      config:
+        prewarm: true
+        auth: subscription
+        defaults:
+          permissionMode: default
+          settingSources: []
+        ask:
+          fallback: deny
+    - id: tool-claude-code
+      name: '@deepseek-ai/dsh-tool-claude-code'
+    - id: claude-code-agent
+      name: '@deepseek-ai/dsh-claude-code-agent'
