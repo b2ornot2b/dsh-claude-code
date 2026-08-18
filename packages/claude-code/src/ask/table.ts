@@ -42,13 +42,52 @@ export type CcAskSettleCause =
   /** The work function threw — a bug, contained into a deny. */
   | 'failed'
 
-/** One ask currently awaiting an answer. A value, never a handle. */
+/**
+ * Which of the three dsh seams an ask is parked on — the same three-way split
+ * `CcAskRouter` routes `canUseTool` through (§4).
+ *
+ * Named for what a HUMAN is being asked to do, not for the dsh service behind
+ * it: a consumer reading `pendingAskDetails` off a snapshot wants to tell "a
+ * tool call is waiting for approval" from "the model asked you a question", and
+ * `'approval'` / `'questions'` (the router's internal `CcAskKind`) are dsh
+ * plumbing names that leak nothing useful upward.
+ */
+export type CcPendingAskKind = 'permission' | 'question' | 'plan'
+
+/** Every {@link CcPendingAskKind}, for schema declaration and validation. */
+export const CC_PENDING_ASK_KINDS: readonly CcPendingAskKind[] = ['permission', 'question', 'plan']
+
+/**
+ * One ask currently awaiting an answer. A value, never a handle.
+ *
+ * `kind`, `reason` and `since` exist so a consumer can say WHAT is pending
+ * instead of only HOW MANY. A count alone is what the production trace exposed
+ * as unusable: `claude_code_status` could report "1 pending ask(s)" while the
+ * ask table already held both the tool name and the CLI's own rendered sentence
+ * for it, and nobody upstream could name what the human was supposed to approve.
+ */
 export interface CcPendingAsk {
   /** The SDK control-request id: the table's key and the idempotency key. */
   readonly requestId: string
+  /** Which seam the ask is parked on, in human terms. */
+  readonly kind: CcPendingAskKind
   /** The tool being decided. */
   readonly toolName: string
-  /** `Date.now()` when the ask was opened. */
+  /**
+   * One line describing what is being asked, when the caller supplied one. For
+   * a permission this is EXACTLY the string the router hands
+   * `ctx.approval.request` as its `reason` (the CLI's pre-rendered `title`, or
+   * `describeCall(...)` when the CLI supplied none), so the prose a delegating
+   * model reads and the prose the human answers are the same words.
+   */
+  readonly reason?: string
+  /** `Date.now()` when the ask was opened — the epoch ms a "pending for N" is measured from. */
+  readonly since: number
+  /**
+   * `Date.now()` when the ask was opened.
+   * @deprecated The original name for {@link CcPendingAsk.since}, kept so
+   *   consumers written before `since` existed still compile. Always equal to it.
+   */
   readonly startedAt: number
 }
 
@@ -58,6 +97,15 @@ export interface CcAskRunSpec {
   readonly requestId: string
   /** The tool being decided, for diagnostics. */
   readonly toolName: string
+  /**
+   * Which seam this ask routes to. Optional so a caller that only cares about
+   * idempotency (and every test that predates the field) still compiles;
+   * `'permission'` is the safe default because it is the only kind whose
+   * fallback can never auto-answer.
+   */
+  readonly kind?: CcPendingAskKind
+  /** One line describing what is being asked, surfaced on {@link CcPendingAsk.reason}. */
+  readonly reason?: string
   /** The SDK's abort signal; aborting withdraws the request. */
   readonly signal?: AbortSignal
   /** Bounded wait in ms; omitted means pend indefinitely (the interactive posture). */
@@ -223,13 +271,24 @@ export class CcAskTable {
     const promise = new Promise<CcPermissionDecision>(settle => { resolve = settle })
     const controller = new AbortController()
 
+    // ONE clock read, shared by both names: `since` and `startedAt` must be the
+    // same instant, or a consumer that migrated between them would report two
+    // different pending durations for one ask.
+    const openedAt = Date.now()
     const entry: AskEntry = {
       promise,
       resolve,
       controller,
       teardown: [],
       signals: new Set<AbortSignal>(),
-      pending: { requestId: spec.requestId, toolName: spec.toolName, startedAt: Date.now() },
+      pending: {
+        requestId: spec.requestId,
+        kind: spec.kind ?? 'permission',
+        toolName: spec.toolName,
+        ...(spec.reason === undefined ? {} : { reason: spec.reason }),
+        since: openedAt,
+        startedAt: openedAt,
+      },
     }
     this.#open.set(spec.requestId, entry)
 

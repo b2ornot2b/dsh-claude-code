@@ -546,6 +546,10 @@ function snapshot(record: CcSessionRecord): CcSessionSnapshot {
     status: record.status,
     ...(record.model === undefined ? {} : { model: record.model }),
     pendingAsks: record.pendingAsks,
+    // A record with no live actor has no ask table to read: either it never got
+    // one (a white-box test registration) or its session already drained the
+    // table on close. Both are honestly empty, never "unknown".
+    pendingAskDetails: [],
     ...(record.contextUsage === undefined ? {} : { contextUsage: record.contextUsage }),
   }
 }

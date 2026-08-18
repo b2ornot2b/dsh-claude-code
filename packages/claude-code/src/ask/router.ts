@@ -45,6 +45,7 @@ import { applyAskFallback } from './fallback.ts'
 import type { CcAskFallbackReason, CcAskKind } from './fallback.ts'
 import type { CcAskRules } from './rules.ts'
 import { CcAskTable } from './table.ts'
+import type { CcPendingAsk, CcPendingAskKind } from './table.ts'
 import { askErrorCode, describeError } from './types.ts'
 import type { ApprovalOutcome, CcAskCallSite, CcAskServices, CcAskTarget } from './types.ts'
 
@@ -171,6 +172,14 @@ export class CcAskRouter {
     return this.#table.pendingCount
   }
 
+  /**
+   * WHAT is awaiting an answer: kind, tool, the reason a human is reading, and
+   * when it started pending. The value projection snapshots carry.
+   */
+  get pendingAskDetails(): readonly CcPendingAsk[] {
+    return this.#table.pending()
+  }
+
   /** Who currently answers for this session, if anyone. */
   get target(): CcAskTarget | undefined {
     return this.#target
@@ -239,10 +248,19 @@ export class CcAskRouter {
       ? 'questions'
       : toolName === CC_EXIT_PLAN_MODE ? 'plan' : 'approval'
     const timeoutMs = this.timeoutFor()
+    // Computed HERE, before the ask is registered, so the table carries the
+    // reason from the first instant the ask is pending — a reason attached
+    // later would be absent exactly when a poller is most likely to read it
+    // (the human has not answered yet, which is the whole point). For the
+    // approval path it is the identical string `requestApproval` sends to
+    // `ctx.approval.request`, computed once and passed down.
+    const reason = askReason(kind, toolName, input, request)
 
     return await this.#table.run({
       requestId: this.askKey(request),
+      kind: pendingKind(kind),
       toolName,
+      ...(reason === undefined ? {} : { reason }),
       ...(request.signal === undefined ? {} : { signal: request.signal }),
       ...(timeoutMs === undefined ? {} : { timeoutMs }),
       // A timeout on the questions path can still be auto-answered under
@@ -258,7 +276,7 @@ export class CcAskRouter {
         case 'plan':
           return await this.reviewPlan(input, signal)
         case 'approval':
-          return await this.requestApproval(toolName, input, request, signal)
+          return await this.requestApproval(toolName, input, request, signal, reason ?? toolName)
       }
     })
   }
@@ -298,6 +316,9 @@ export class CcAskRouter {
    * @param input - its arguments.
    * @param request - the SDK request context.
    * @param signal - the table's derived signal (aborts on withdrawal, timeout or close).
+   * @param reason - the one-line description of what is being approved, computed
+   *   by {@link askReason} in `route` so the pending-ask table and the dsh
+   *   approval prompt carry the SAME words.
    * @returns the decision, mapped EXACTLY per §4.1's outcome table.
    */
   private async requestApproval(
@@ -305,6 +326,7 @@ export class CcAskRouter {
     input: Record<string, unknown>,
     request: CcPermissionRequest,
     signal: AbortSignal,
+    reason: string,
   ): Promise<CcPermissionDecision> {
     // 1. The integration-owned rule cache, BEFORE any prompt. A prompt forced by
     //    the user's own `permissions.ask` rule is never short-circuited: that
@@ -341,9 +363,6 @@ export class CcAskRouter {
         `claude-code ask: ${toolName} was withdrawn while its tool/call was being correlated; not asking dsh`)
       return { behavior: 'deny', message: CC_CANCELLED_MESSAGE }
     }
-    // The CLI's pre-rendered sentence beats anything we could reconstruct
-    // (delta S2); `describeCall` is the fallback for older CLIs.
-    const reason = request.title ?? describeCall(toolName, input)
 
     let outcome: ApprovalOutcome
     try {
@@ -662,6 +681,70 @@ export class CcAskRouter {
       return undefined
     }
     return contents
+  }
+}
+
+/**
+ * Translate the router's internal routing name into the human-facing
+ * {@link CcPendingAskKind} a snapshot reports.
+ *
+ * Two vocabularies, deliberately: `CcAskKind` names the dsh SEAM an ask goes to
+ * (`approval`, `questions`, `plan`) and is what the fallback policy is written
+ * against; `CcPendingAskKind` names what a PERSON is being asked to do, which is
+ * what a consumer polling a snapshot needs.
+ * @param kind - the routing kind.
+ * @returns the reported kind.
+ */
+function pendingKind(kind: CcAskKind): CcPendingAskKind {
+  switch (kind) {
+    case 'questions':
+      return 'question'
+    case 'plan':
+      return 'plan'
+    case 'approval':
+      return 'permission'
+  }
+}
+
+/**
+ * The one line that says what this ask is about, for
+ * {@link CcPendingAsk.reason}.
+ *
+ * Per path:
+ *
+ * - **approval** — `request.title ?? describeCall(toolName, input)`, i.e.
+ *   VERBATIM what `ctx.approval.request` is given as its `reason`. The CLI's
+ *   pre-rendered sentence beats anything we could reconstruct (delta S2);
+ *   `describeCall` is the fallback for older CLIs. A delegating model and the
+ *   human answering therefore read the same words for the same ask.
+ * - **questions** — the first question's text, bounded. It is the one field that
+ *   tells a reader what the model got stuck on.
+ * - **plan** — the fixed review question. The plan body itself is deliberately
+ *   NOT inlined: it is markdown of unbounded length, and this field is a
+ *   one-line hint, never the record.
+ *
+ * @param kind - the routing kind.
+ * @param toolName - the tool being decided.
+ * @param input - its arguments.
+ * @param request - the SDK request context (its `title`, when the CLI sent one).
+ * @returns the bounded one-line reason, or undefined when nothing legible exists.
+ */
+function askReason(
+  kind: CcAskKind,
+  toolName: string,
+  input: Record<string, unknown>,
+  request: CcPermissionRequest,
+): string | undefined {
+  switch (kind) {
+    case 'approval':
+      return request.title ?? describeCall(toolName, input)
+    case 'plan':
+      return 'Approve this plan?'
+    case 'questions': {
+      const first = Array.isArray(input['questions']) ? input['questions'][0] : undefined
+      const text = asString(asRecord(first)?.['question'])?.replace(/\s+/gu, ' ').trim()
+      return text === undefined || text === '' ? undefined : truncate(text, MAX_REASON_LENGTH)
+    }
   }
 }
 

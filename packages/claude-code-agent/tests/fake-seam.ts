@@ -193,6 +193,8 @@ export class FakeCcSession implements CcAgentSession {
       status: this.#status,
       ...(this.#model === undefined ? {} : { model: this.#model }),
       pendingAsks: 0,
+      // This double never routes an ask, so nothing can ever be pending on it.
+      pendingAskDetails: [],
     }
   }
 

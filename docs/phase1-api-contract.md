@@ -352,6 +352,7 @@ interface CcSessionSnapshot {
   readonly status: CcSessionStatus
   readonly model?: string                 // ABSENT until the SDK reports one
   readonly pendingAsks: number
+  readonly pendingAskDetails: readonly CcPendingAsk[]   // WHAT is pending; [] when nothing is
   readonly contextUsage?: CcContextUsage
 }
 
@@ -401,6 +402,7 @@ class CcSession {
   readonly id: CcSessionId
   get status(): CcSessionStatus        // 'starting' -> 'idle' <-> 'running' -> 'closed'
   get pendingAsks(): number            // asks awaiting an answer (Phase 4); 0 without an ask channel
+  get pendingAskDetails(): readonly CcPendingAsk[]   // kind/tool/reason/since; [] without an ask channel
   get lastAskError(): ClaudeCodeError | undefined   // Phase 4, ask.fallback: 'error' only
   get capabilities(): readonly string[]        // from the LATEST system/init — feature-detect on these
   get initializeResult(): CcInitializeResult | undefined   // commands, models, account, output_style
@@ -689,6 +691,7 @@ class CcAskRouter {
   readonly canUseTool: CcCanUseTool          // hand this to the SDK; ALWAYS resolves
   get table(): CcAskTable
   get pendingAsks(): number
+  get pendingAskDetails(): readonly CcPendingAsk[]
   get target(): CcAskTarget | undefined
   attachTarget(target: CcAskTarget): () => void
   attachCallSite(site: CcAskCallSite): () => void
@@ -830,13 +833,22 @@ Copied verbatim from `@deepseek-ai/dsh-plan-mode`'s own convention:
 class CcAskTable {
   constructor(deps?: CcAskTableDeps)          // { logger?, retain? = 512, onSettle? }
   get pendingCount(): number
-  pending(): readonly CcPendingAsk[]          // { requestId, toolName, startedAt }
+  pending(): readonly CcPendingAsk[]          // { requestId, kind, toolName, reason?, since, startedAt }
   run(spec: CcAskRunSpec, work: (signal: AbortSignal) => Promise<CcPermissionDecision>): Promise<CcPermissionDecision>
   settleAll(message?: string): number
 }
 const ASK_WITHDRAWN_MESSAGE: 'Request withdrawn'
 const ASK_SESSION_CLOSED_MESSAGE: string
+const CC_PENDING_ASK_KINDS: readonly CcPendingAskKind[]   // 'permission' | 'question' | 'plan'
 ```
+
+`CcAskRunSpec` gained two OPTIONAL fields, `kind` (default `'permission'`) and
+`reason`; `CcPendingAsk` gained `kind`, `reason?` and `since` (epoch ms, the
+entry's own creation instant). `startedAt` is retained as a deprecated alias of
+`since` and is always equal to it. The router fills `reason` with EXACTLY the
+string it passes `ctx.approval.request` (`request.title ?? describeCall(...)`),
+so the prose a delegating model reads and the prose a human answers are the same
+words.
 
 Keyed by the SDK `requestId` (delta S2). Four things settle an ask — the dsh
 answer, the SDK signal aborting (deny `'Request withdrawn'`, matching dsh's own
@@ -934,18 +946,36 @@ Six tools, all bodies live as of Phase 5. `inject: ['tools', 'claudeCode']`;
 
 | Tool | Args | Canonical return |
 |---|---|---|
-| `claude_code_open` | `cwd`, `prompt?`, `model?`, `permission_mode?`, `resume?`, `fork?`, `background?` | `{ kind: 'session', session_id, status, result?, usage?, cost_usd? }` **or** `{ kind: 'background', jobId, ccSessionId }` |
+| `claude_code_open` | `cwd`, `prompt?`, `model?`, `permission_mode?`, `resume?`, `fork?`, `background?` | `{ kind: 'session', session_id, status, result?, usage?, cost_usd?, pending_asks?, pending_ask_details? }` **or** `{ kind: 'background', jobId, ccSessionId }` |
 | `claude_code_send` | `session_id`, `message`, `mode: 'followup'\|'steer'` | `{ status }` |
-| `claude_code_wait` | `session_id`, `timeout_ms?` | `{ status, result?, usage?, cost_usd? }` |
-| `claude_code_status` | `session_id` | `{ status, pending_asks, context_usage? }` |
+| `claude_code_wait` | `session_id`, `timeout_ms?` | `{ status, result?, usage?, cost_usd? }` **or**, when the wait elapsed, `{ status: 'running', session_id, pending_asks, pending_ask_details }` |
+| `claude_code_status` | `session_id` | `{ status, pending_asks, pending_ask_details, context_usage? }` |
 | `claude_code_cancel` | `session_id`, `keep_queued?` | `{ still_queued: string[] }` |
 | `claude_code_close` | `session_id` | `{ closed: true }` |
 
 **Schema change (additive only).** `claude_code_open`'s `session` branch gained
 three OPTIONAL fields — `result`, `usage` (`{ input_tokens, output_tokens }`),
-`cost_usd` — because synchronous mode now returns the turn it waited for.
-Nothing was removed or retyped; `output.render` appends the answer under the
-session line.
+`cost_usd` — because synchronous mode now returns the turn it waited for, plus
+two more (`pending_asks`, `pending_ask_details`) for the case where it did not.
+`claude_code_wait` gained `session_id`, `pending_asks` and `pending_ask_details`,
+all optional and all present only when the wait elapsed with the turn still
+running. `claude_code_status` gained `pending_ask_details`, required and always
+present (empty when nothing pends, so "nothing is pending" is never confused
+with "this build cannot tell you"). Nothing was removed or retyped.
+
+One `pending_ask_details` shape everywhere:
+
+```jsonc
+{ "kind": "permission" | "question" | "plan",
+  "tool_name": "Write",                              // optional
+  "reason": "Write: /private/tmp/scratch/notes.txt",  // optional; the human's own words
+  "waiting_ms": 600000 }                              // elapsed, not an epoch
+```
+
+`waiting_ms` is a DURATION rather than a timestamp on purpose: a model has no
+clock to subtract an epoch from. It is computed once, in `execute`, and stored
+in the canonical value so `output.render` stays a pure function of
+`(args, value)` and a logged result re-renders identically.
 
 **The open sequence** (`src/open.ts`), which is the whole reason the tool does
 not pass `prompt` straight to the seam:
@@ -973,14 +1003,49 @@ default denies every ask with an explanation.
 `claude_code_open` returns after the opening turn; the session stays open for
 `claude_code_send` follow-ups until one of: `claude_code_close`, the seam's
 teardown effect (plugin unload/HMR), or — for a background session —
-`job_kill` / owner disposal. Neither `exec.signal` nor a `CC_TIMEOUT` closes
+`job_kill` / owner disposal. Neither `exec.signal` nor an elapsed wait closes
 anything.
 
-**Timeouts.** `claude_code_open` (sync, with a prompt) waits up to
-`SYNC_OPEN_TIMEOUT_MS` (10 min); `claude_code_wait` clamps `timeout_ms` to
-`MAX_WAIT_TIMEOUT_MS` (10 min) and uses it when `timeout_ms` is absent. Expiry
-is `CC_TIMEOUT` carrying `data.session_id` — the session is untouched and still
-running.
+**Timeouts, and why an elapsed wait is not an error.** "The turn is still
+running because a human has not answered a permission prompt yet" is the NORMAL
+steady state of this integration, so the tools express it as a value:
+
+- `claude_code_open` (sync, with a prompt) waits up to `SYNC_OPEN_TIMEOUT_MS`
+  (10 min). On expiry it RESOLVES with the session branch — `status: 'running'`,
+  the `session_id`, `pending_asks`, `pending_ask_details`, and no `result`. The
+  session stays open, as it always did.
+- `claude_code_wait` uses `DEFAULT_WAIT_TIMEOUT_MS` (**60 s**) when `timeout_ms`
+  is absent, and clamps an explicit value to `MAX_WAIT_TIMEOUT_MS` (10 min). On
+  expiry it RESOLVES with `{ status: 'running', session_id, pending_asks,
+  pending_ask_details }`.
+
+Both used to throw `CC_TIMEOUT` after a ten-minute block, and that code is now
+gone from the taxonomy. A production trace showed why: a delegating model read
+the throw as a failure, cancelled the turn and opened a fresh session — three
+sessions and ~30 minutes, with the original `Write` approval still unanswered.
+`output.render` now states the session id, the tool, the human's own reason, how
+long it has been pending, and that calling `claude_code_wait` again (never
+cancel, never re-open) is the correct next step.
+
+Two invariants make that value trustworthy rather than merely well-worded:
+
+- **A result that lands during the wait always wins the photo finish.** The
+  seam's timeout is a `setTimeout` rejecting a parked waiter, so a result
+  arriving in the same tick loses by microtasks. `waitCapped` therefore re-reads
+  `CcSession.lastResult` after a `TIMEOUT` and returns it when it is a
+  DIFFERENT envelope from the one held before the wait began — identity, not
+  presence, because `lastResult` outlives its turn and reporting a previous
+  turn's answer for the turn actually being waited on would be a fabrication.
+  Without it a finished turn could be reported as `running` and its result
+  withheld until the next poll a minute later.
+- **`pending_asks` and `pending_ask_details` come from ONE `snapshot()`.**
+  Status, count and details are projected from the one ask table in a single
+  synchronous read, so "1 pending ask, nothing described" — the exact unusable
+  signal this change exists to delete — is unconstructible rather than merely
+  unlikely. `claude_code_status` reads the same single snapshot (or its
+  tombstone, whose asks were denied by `settleAll()` BEFORE the close listeners
+  ran, so a closed session reports `0` / `[]` and never advertises a human
+  answer that can no longer arrive).
 
 **Background mode** (`src/background.ts`) follows `@deepseek-ai/dsh-tool-bash`
 exactly, per D10:
@@ -1012,8 +1077,9 @@ exactly, per D10:
   caller AND leaves a job that settled `failed` — visible in `job_list`.
 
 **Errors.** The tool layer adds `ClaudeCodeToolError` (`HarnessError`, name
-`ClaudeCodeToolError`) with codes `CC_NO_SESSION`, `CC_TIMEOUT`, `CC_NO_JOBS`,
-`CC_ABORTED`, `CC_JOB_REJECTED`. Everything the SEAM refuses (`INVALID_CWD`, `SESSION_LIMIT`,
+`ClaudeCodeToolError`) with codes `CC_NO_SESSION`, `CC_NO_JOBS`, `CC_ABORTED`,
+`CC_JOB_REJECTED`. (`CC_TIMEOUT` was REMOVED: nothing raises it any more — an
+elapsed wait is a resolved `status: 'running'` value.) Everything the SEAM refuses (`INVALID_CWD`, `SESSION_LIMIT`,
 `SESSION_EXISTS`, `BACKEND_ERROR`, `SESSION_CLOSED`, …) is re-thrown untouched:
 its `code` is what a caller routes on, and re-wrapping would bury it.
 
@@ -1345,6 +1411,10 @@ an offline regression test, so none of them can come back silently.
 12. **`CcSession.pendingAsks` is real now** (§4.4b said "0 until Phase 4"), and
     `CcSessionSnapshot.pendingAsks` follows it. `close()` drains the table before
     tearing down the query, so a pending ask always resolves — as a deny.
+    A count alone turned out to be unusable, so `pendingAskDetails` sits beside
+    it on both: `{ kind, toolName, reason?, since }` per pending ask, sourced
+    from the ask table. Nobody could previously tell a human WHAT to approve —
+    only that something was pending.
 13. **`CcSessionDeps` gained `asks`**, and `canUseTool` precedence is now
     *explicit dep → ask channel → fail-closed deny*. A session built with
     neither still denies every tool call with an explanation (the message no

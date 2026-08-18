@@ -10,10 +10,19 @@
  * anything.
  *
  * Codes are prefixed `CC_` so they never collide with the seam's own taxonomy
- * (`TIMEOUT` from `waitForResult` is the seam's; `CC_TIMEOUT` is ours, and it
- * carries the still-open session's id) and are read by string comparison, never
- * by `instanceof`: two copies of a package on two resolution planes make an
- * identity check silently false (spec review §3, gotcha 15).
+ * and are read by string comparison, never by `instanceof`: two copies of a
+ * package on two resolution planes make an identity check silently false (spec
+ * review §3, gotcha 15).
+ *
+ * **`CC_TIMEOUT` is gone, deliberately.** It used to be raised when a bounded
+ * wait elapsed with the turn still running — which is the single most common
+ * NORMAL outcome in this integration, because a human has not answered a
+ * permission prompt yet. Expressing it as an error taught delegating models to
+ * cancel the turn and re-open a fresh session (three sessions, ~30 minutes, one
+ * unfinished step in the trace that motivated this change). `claude_code_wait`
+ * and synchronous `claude_code_open` now RESOLVE with `status: 'running'` plus
+ * `pending_ask_details`; the seam's own `TIMEOUT` still exists and is still what
+ * they translate, it simply no longer becomes a thrown tool error.
  *
  * @module @deepseek-ai/dsh-tool-claude-code
  */
@@ -28,12 +37,6 @@ export type CcToolErrorCode =
    * a bare UUID this seam could ever have minted.
    */
   | 'CC_NO_SESSION'
-  /**
-   * A bounded wait this layer imposed elapsed. The session is UNTOUCHED and
-   * still open — `data.session_id` names it so the caller can wait again,
-   * cancel it, or close it.
-   */
-  | 'CC_TIMEOUT'
   /**
    * `background: true` in a composition with no jobs runtime. The message names
    * the packages to load; nothing was opened.
@@ -58,7 +61,7 @@ export type CcToolErrorCode =
 export interface CcToolErrorOptions extends ErrorOptions {
   /**
    * Machine-readable specifics a caller can act on — currently only
-   * `session_id`, on `CC_TIMEOUT`. String-valued so the whole error stays
+   * `session_id`, on `CC_NO_SESSION`. String-valued so the whole error stays
    * losslessly JSON-serializable through the tool result envelope.
    */
   readonly data?: Readonly<Record<string, string>>

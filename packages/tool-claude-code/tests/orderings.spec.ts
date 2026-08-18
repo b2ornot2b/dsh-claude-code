@@ -17,7 +17,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { CWD, firstQuery, mountTools, settle, waitFor } from './harness.ts'
-import { MAX_WAIT_TIMEOUT_MS, SYNC_OPEN_TIMEOUT_MS } from '../src/index.ts'
+import { DEFAULT_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS, SYNC_OPEN_TIMEOUT_MS } from '../src/index.ts'
 
 describe('close during a synchronous open', () => {
   it('fails the parked open with the seam\'s SESSION_CLOSED instead of hanging to the cap', async () => {
@@ -53,6 +53,12 @@ describe('close during a synchronous open', () => {
     // are the same number.
     expect(SYNC_OPEN_TIMEOUT_MS).toBe(600_000)
     expect(MAX_WAIT_TIMEOUT_MS).toBe(SYNC_OPEN_TIMEOUT_MS)
+    // The DEFAULT is deliberately NOT the ceiling: an omitted `timeout_ms` used
+    // to buy a ten-minute block ending in a throw, which is what taught the
+    // model in the production trace to give up on the session. See
+    // `pending.spec.ts` for the clamping/defaulting matrix.
+    expect(DEFAULT_WAIT_TIMEOUT_MS).toBe(60_000)
+    expect(DEFAULT_WAIT_TIMEOUT_MS).toBeLessThan(MAX_WAIT_TIMEOUT_MS)
   })
 })
 
@@ -132,8 +138,13 @@ describe('a wait whose timeout races the result', () => {
       await query.emitResult('success', { result: 'just in time' })
       const waited = await pending
 
-      if (waited.isError) {
-        expect(waited.error?.info?.code).toBe('CC_TIMEOUT')
+      // BOTH winners now resolve — the timeout no longer has an error branch —
+      // so the property is "one of the two canonical values, never a failure".
+      expect(waited.isError, JSON.stringify(waited.error)).toBe(false)
+      if ((waited.value as { result?: string }).result === undefined) {
+        expect(waited.value).toMatchObject({
+          status: 'running', session_id: sessionId, pending_asks: 0, pending_ask_details: [],
+        })
       } else {
         expect(waited.value).toMatchObject({ status: 'idle', result: 'just in time' })
       }

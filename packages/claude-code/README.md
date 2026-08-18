@@ -151,7 +151,21 @@ Asks are tracked in a per-session table keyed by the SDK's `requestId`, so a red
 `reinitialize()` returns the original answer instead of prompting a human twice; the table
 settles on an answer, an abort, `ask.timeoutMs` / `ask.delegatedTimeoutMs`, or session close
 (`close()` drains it before the query goes away). `session.pendingAsks` — and the snapshot
-field of the same name — report what is still waiting.
+field of the same name — report how many asks are still waiting.
+
+**`pendingAskDetails` reports WHAT they are.** Beside the count, on both the actor and the
+snapshot, sits `readonly pendingAskDetails: readonly CcPendingAsk[]`: one
+`{ requestId, kind, toolName, reason?, since }` per pending ask, in arrival order, empty when
+nothing pends. `kind` is `'permission' | 'question' | 'plan'` — what a *person* is being asked
+to do, not which dsh service is behind it — and `reason` is **exactly** the string the router
+hands `ctx.approval.request` (`request.title ?? describeCall(toolName, input)`), so the words
+a delegating consumer reads are the words the human is answering. `since` is the epoch
+millisecond the ask opened; `startedAt` remains as a deprecated alias of it.
+
+This exists because the count alone was unusable. A real session spent thirty minutes blocked
+on an unanswered `Write` approval while every consumer above the seam could see only
+"1 pending ask" — even though this table already held both the tool name and the sentence the
+human was looking at.
 
 Four orderings the table is explicit about, because each of them is a way to hang or mislead
 a session rather than merely to answer it oddly:
@@ -386,6 +400,14 @@ over its own transcript, which the dsh mirror neither feeds nor invalidates.
   a permission channel, so nothing a human clicks can write the rule cache. Entries come from
   `ask.rules` in configuration or programmatically via `CcAskRules.add()`. When dsh grows the
   outcome, the UI-driven path is one `add()` call away and nothing else changes.
+- **`pendingAskDetails` is a snapshot, not a subscription** — there is no event when an ask
+  opens or settles, so a consumer that wants to know polls `snapshot()` (which is what
+  `claude_code_status` does). An ask that opens and settles between two reads is invisible;
+  that is acceptable because the field exists to explain a session that is *stuck*, and a
+  stuck ask is by definition still there.
+- **`reason` is a bounded one-line hint, never the record** — it is capped at 240 characters
+  and, for a plan review, is the fixed question rather than the plan body (which is unbounded
+  markdown). The full record is the dsh session log's `approval/asked` pair.
 - **A session with no ask target denies every tool call** — that is the fail-closed default,
   not a stub: a silently-allowing default is the one failure mode that cannot be undone.
   Attach a target at `open({ ask })` (or `attachAskTarget`) to give a session a human.
