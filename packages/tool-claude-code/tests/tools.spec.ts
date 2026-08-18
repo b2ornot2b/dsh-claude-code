@@ -1,5 +1,5 @@
 /**
- * Phase 5: the six tool bodies, driven through the REAL tool runtime against
+ * Phase 5 (+ Phase 8's `claude_code_list`): the tool bodies, driven through the REAL tool runtime against
  * the REAL seam on a fake SDK backend. Nothing here spawns a subprocess.
  *
  * Every assertion that reads `result.value` is also a schema round trip: the

@@ -24,6 +24,7 @@ import { realBackend } from './backend.ts'
 import type { CcCanUseTool, QueryBackend } from './backend.ts'
 import { Config as ConfigSchema, resolveClaudeCodeConfig } from './config.ts'
 import type { ClaudeCodeConfig, ResolvedClaudeCodeConfig } from './config.ts'
+import { formatDuration, isReapable, selectReapable, sessionLimitError } from './inventory.ts'
 import { attachMirror } from './mirror.ts'
 import type { CcMirrorHandle, CcMirrorOptions } from './mirror.ts'
 import { WarmPool } from './prewarm.ts'
@@ -31,7 +32,7 @@ import { CcSession, resolveQueryOptions } from './session.ts'
 import type { CcSessionDeps } from './session.ts'
 import { ClaudeCodeError, newCcSessionId } from './types.ts'
 import type {
-  CcAccountInfo, CcCloseReason, CcContextUsage, CcLogger, CcOpenOptions, CcSessionId,
+  CcAccountInfo, CcCloseReason, CcContextUsage, CcListOptions, CcLogger, CcOpenOptions, CcSessionId,
   CcSessionSnapshot, CcSessionStatus, ClaudeCode,
 } from './types.ts'
 
@@ -59,14 +60,22 @@ declare module '@deepseek-ai/cordis' {
  */
 interface CcSessionRecord {
   readonly id: CcSessionId
+  /** The absolute working directory — carried on the record so the inventory can name it. */
+  readonly cwd: string
+  /** Epoch ms this session was registered. */
+  readonly openedAt: number
   status: CcSessionStatus
   model?: string
   pendingAsks: number
   contextUsage?: CcContextUsage
   /** The live actor, when this record is backed by one (always, outside white-box tests). */
   session?: CcSession
-  /** Settle pending asks as denied, then close the SDK query. Must be idempotent. */
-  close(): Promise<void>
+  /**
+   * Settle pending asks as denied, then close the SDK query. Must be idempotent.
+   * @param reason - why it is closing; the record forwards it to the actor so a
+   *   reaped session is distinguishable from one somebody asked to close.
+   */
+  close(reason?: CcCloseReason): Promise<void>
 }
 
 /**
@@ -164,6 +173,28 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
       await this.pool.close()
       await this.closeAll()
     }, 'claudeCode:sessions')
+
+    // OPT-IN. With `limits.idleTimeoutMs` unset there is no sweep and NO TIMER
+    // AT ALL — not a disabled one, not a zero-length one — because an operator
+    // who did not ask for reaping must get exactly the behaviour they had
+    // before this option existed, down to the event loop.
+    const idleTimeoutMs = this.config.limits.idleTimeoutMs
+    if (idleTimeoutMs !== undefined) {
+      ctx.effect(() => {
+        // ONE timer for the whole service, not one per session: a per-session
+        // timer would have to be created, cleared and re-armed on every send and
+        // every received message (that is the activity clock), which is a
+        // rearm-per-SDK-message on a streaming turn.
+        const timer = setInterval(() => {
+          void this.reapIdle(idleTimeoutMs)
+        }, sweepIntervalMs(idleTimeoutMs))
+        // A background sweep must never be the reason a process refuses to exit.
+        timer.unref?.()
+        return () => {
+          clearInterval(timer)
+        }
+      }, 'claudeCode:idleSweep')
+    }
   }
 
   /**
@@ -184,9 +215,10 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
     assertUsableCwd(options.cwd)
     const limit = this.config.limits.maxConcurrentSessions
     if (this.sessions.size >= limit) {
-      throw new ClaudeCodeError(
-        `claude-code: cannot open another session, limits.maxConcurrentSessions (${limit}) is reached`,
-        'SESSION_LIMIT')
+      // The refusal INVENTORIES what is holding the slots — see `inventory.ts`
+      // for the trace that made this mandatory. The prose and `error.data`
+      // are built from one projection so they can never disagree.
+      throw sessionLimitError(this.list(), limit, Date.now())
     }
 
     // A plain resume continues under the id it resumes (see below), so it would
@@ -248,11 +280,13 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
 
     const record: CcSessionRecord = {
       id,
+      cwd: options.cwd,
+      openedAt: Date.now(),
       status: 'starting',
       pendingAsks: 0,
       session,
-      close: async () => {
-        await session.close()
+      close: async (reason) => {
+        await session.close(reason)
       },
     }
     this.sessions.set(id, record)
@@ -312,10 +346,27 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
 
   /**
    * Every session registered in this context, in open order.
-   * @returns a fresh snapshot array (never a live view).
+   *
+   * LIVE sessions only by default, unchanged since Phase 2 — anything counting
+   * slots against `limits.maxConcurrentSessions` (this service's own `open()`
+   * included) must not count tombstones. `{ includeClosed: true }` appends the
+   * recently-closed ones, oldest tombstone first, for the caller that is trying
+   * to work out where a session it was handed the id of went.
+   *
+   * @param options - `{ includeClosed }`; omitted means live only.
+   * @returns a fresh snapshot array, at most one entry per id (never a live view).
    */
-  list(): readonly CcSessionSnapshot[] {
-    return [...this.sessions.values()].map(snapshot)
+  list(options: CcListOptions = {}): readonly CcSessionSnapshot[] {
+    const live = [...this.sessions.values()].map(snapshot)
+    if (options.includeClosed !== true) return live
+    // A tombstone for an id that is LIVE AGAIN is suppressed. A plain resume
+    // continues under the SAME id it resumes, so a session closed here and then
+    // resumed here holds both a registry record and a tombstone — and listing
+    // both would report one session twice, once as `closed`, with the corpse's
+    // `closeReason` attached to the row a caller is about to send to. `get()`
+    // has always preferred the live record for exactly this reason; so does this.
+    const tombstones = [...this.closed.values()].filter(entry => !this.sessions.has(entry.id))
+    return [...live, ...tombstones]
   }
 
   /**
@@ -324,13 +375,13 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
    * @param id - the shared dsh/CC session id.
    * @returns true when a session was closed, false when the id was unknown.
    */
-  async close(id: CcSessionId): Promise<boolean> {
+  async close(id: CcSessionId, reason: CcCloseReason = 'closed'): Promise<boolean> {
     const record = this.sessions.get(id)
     if (record === undefined) return false
     // Deregister BEFORE awaiting: a concurrent close() or the teardown loop
     // must not enter the same record's close a second time.
     this.sessions.delete(id)
-    await record.close()
+    await record.close(reason)
     return true
   }
 
@@ -414,6 +465,62 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
         `claude-code: no session ${id} is registered in this context`, 'UNKNOWN_SESSION')
     }
     return actor.attachAskTarget(target)
+  }
+
+  /**
+   * One sweep of the opt-in idle reaper: close every session that is idle, has
+   * NO pending ask, and has seen no activity for `limits.idleTimeoutMs`.
+   *
+   * Closed through the same {@link ClaudeCodeService.close} an explicit
+   * `claude_code_close` uses — mirror finalized, tombstone recorded, waiters
+   * settled — with `reaped` as the only difference, so the two paths cannot
+   * drift. Every reap is logged with the session, its idle age and the ceiling
+   * it crossed: a session that vanishes on its own must leave a reason behind.
+   *
+   * @param idleTimeoutMs - the configured idle ceiling.
+   * @returns the ids reaped, in the order they were closed.
+   */
+  private async reapIdle(idleTimeoutMs: number): Promise<readonly CcSessionId[]> {
+    const now = Date.now()
+    // Selection is a pure function of the snapshots, so the "never reap a
+    // session with a pending ask" rule is stated once and tested without a timer.
+    const doomed = selectReapable(this.list(), idleTimeoutMs, now)
+    const reaped: CcSessionId[] = []
+    for (const id of doomed) {
+      // RE-ASKED, per session, immediately before closing it. The loop awaits
+      // each close, so every id after the first is being acted on across at
+      // least one turn of the event loop — and a permission ask raised by the
+      // subprocess, or a `send()` from a tool call, lands in exactly that gap.
+      // Reaping on the strength of the selection alone would close a session a
+      // human had just been asked to decide on. This re-check and the
+      // `close()` below run in one synchronous block (`close()` deregisters
+      // before its first `await`), so nothing can slip between them.
+      const record = this.sessions.get(id)
+      if (record === undefined) continue
+      const current = snapshot(record)
+      if (!isReapable(current, idleTimeoutMs, Date.now())) {
+        this.log.debug(
+          `claude-code: idle sweep skipped session ${id} — it became ${current.status} with `
+          + `${current.pendingAsks} pending ask(s) after the sweep selected it`)
+        continue
+      }
+      const idleMs = now - current.lastActivityAt
+      try {
+        if (!await this.close(id, 'reaped')) continue
+      } catch (error) {
+        // A sweep is best-effort background work: one session that fails to
+        // close must not stop the others being reclaimed, and must not reject
+        // out of a timer callback where nobody can catch it.
+        this.log.debug(`claude-code: idle sweep failed to reap session ${id}: `
+          + `${error instanceof Error ? error.message : String(error)}`)
+        continue
+      }
+      reaped.push(id)
+      this.log.debug(
+        `claude-code: reaped session ${id} — idle ${formatDuration(idleMs)} with no pending asks, past the `
+        + `limits.idleTimeoutMs ceiling of ${formatDuration(idleTimeoutMs)}; closed with reason "reaped"`)
+    }
+    return reaped
   }
 
   /**
@@ -529,6 +636,27 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
  */
 export const CLOSED_SESSION_HISTORY = 32
 
+/** Shortest interval the idle sweep will ever run at, however small the ceiling. */
+export const MIN_IDLE_SWEEP_MS = 250
+
+/** Longest interval the idle sweep will ever run at, however large the ceiling. */
+export const MAX_IDLE_SWEEP_MS = 60_000
+
+/**
+ * How often the single idle sweep timer fires for a given ceiling.
+ *
+ * A quarter of the ceiling, clamped: a session is therefore reclaimed within
+ * ~1.25x `idleTimeoutMs` rather than up to 2x it (which is what sweeping at
+ * exactly the ceiling would give), while a one-minute floor keeps a very long
+ * ceiling from waking the process every few seconds for nothing.
+ *
+ * @param idleTimeoutMs - the configured idle ceiling.
+ * @returns the sweep interval in milliseconds.
+ */
+export function sweepIntervalMs(idleTimeoutMs: number): number {
+  return Math.min(MAX_IDLE_SWEEP_MS, Math.max(MIN_IDLE_SWEEP_MS, Math.floor(idleTimeoutMs / 4)))
+}
+
 /**
  * Project one bookkeeping record into the public value shape. Optional fields
  * are conditionally spread: `exactOptionalPropertyTypes` rejects assigning a
@@ -544,6 +672,11 @@ function snapshot(record: CcSessionRecord): CcSessionSnapshot {
   return {
     id: record.id,
     status: record.status,
+    cwd: record.cwd,
+    openedAt: record.openedAt,
+    // A record with no live actor has no activity clock of its own; its
+    // registration is the only thing that ever happened to it.
+    lastActivityAt: record.openedAt,
     ...(record.model === undefined ? {} : { model: record.model }),
     pendingAsks: record.pendingAsks,
     // A record with no live actor has no ask table to read: either it never got

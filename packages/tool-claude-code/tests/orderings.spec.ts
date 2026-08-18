@@ -1,5 +1,5 @@
 /**
- * Phase 5 orderings probe: what the six tools do when calls INTERLEAVE.
+ * Phase 5 orderings probe: what the tools do when calls INTERLEAVE.
  *
  * Every case here is one a model can produce without trying — it has several
  * tools and no ordering guarantee between them — and every one of them has a

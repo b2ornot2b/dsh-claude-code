@@ -1,0 +1,11 @@
+[ 5580880ms] [ERROR] Failed to load resource: net::ERR_INCOMPLETE_CHUNKED_ENCODING @ http://127.0.0.1:3081/plugins/events:0
+[ 5580881ms] [WARNING] [web-runtime] connection lost, retry #1 @ http://127.0.0.1:3081/plugins/@deepseek-ai/dsh-client-connection/client.js?rev=bc3c3fa9d26b:115
+[ 5581292ms] [ERROR] WebSocket connection to 'ws://127.0.0.1:3081/api/events.mux' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:3081/plugins/@deepseek-ai/dsh-client-connection/client.js?rev=bc3c3fa9d26b:10020
+[ 5581293ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:3081/api/host.describe:0
+[ 5581293ms] [WARNING] WebSocket connection to 'ws://127.0.0.1:3081/api/events.mux' failed: WebSocket is closed before the connection is established. @ http://127.0.0.1:3081/plugins/@deepseek-ai/dsh-client-connection/client.js?rev=bc3c3fa9d26b:10055
+[ 5581293ms] [WARNING] WebSocket connection to 'ws://127.0.0.1:3081/api/events.host' failed: WebSocket is closed before the connection is established. @ http://127.0.0.1:3081/plugins/@deepseek-ai/dsh-client-connection/client.js?rev=bc3c3fa9d26b:10055
+[ 5581293ms] [WARNING] [web-runtime] connection lost, retry #2 @ http://127.0.0.1:3081/plugins/@deepseek-ai/dsh-client-connection/client.js?rev=bc3c3fa9d26b:115
+[ 5582112ms] [ERROR] WebSocket connection to 'ws://127.0.0.1:3081/api/events.mux' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:3081/plugins/@deepseek-ai/dsh-client-connection/client.js?rev=bc3c3fa9d26b:10020
+[ 5582113ms] [WARNING] WebSocket connection to 'ws://127.0.0.1:3081/api/events.host' failed: WebSocket is closed before the connection is established. @ http://127.0.0.1:3081/plugins/@deepseek-ai/dsh-client-connection/client.js?rev=bc3c3fa9d26b:10055
+[ 5582119ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:3081/api/host.describe:0
+[ 5582119ms] [WARNING] [web-runtime] connection lost, retry #3 @ http://127.0.0.1:3081/plugins/@deepseek-ai/dsh-client-connection/client.js?rev=bc3c3fa9d26b:115

@@ -145,16 +145,23 @@ export const CC_SESSION_STATUSES: readonly CcSessionStatus[] = ['starting', 'run
  *   The turn it was running will never produce a result: waiters fail with
  *   `SESSION_CLOSED`, the mirror's dangling turn is finalized as aborted, and a
  *   background job settles `failed` rather than `completed`.
+ * - `reaped` — the service's idle sweep closed it because it had been idle,
+ *   with NO pending ask, for longer than `limits.idleTimeoutMs`. Mechanically
+ *   identical to `closed` (same close sequence, same mirror finalize, same
+ *   tombstone); it is a separate reason because nobody asked, and a caller
+ *   whose session vanished deserves to read "the composition reclaimed it after
+ *   N ms idle" instead of "somebody closed it". Only ever produced when an
+ *   operator opted in — the timeout is unset by default.
  *
  * The distinction is observable ONLY through {@link CcSessionSnapshot.closeReason}
- * and {@link CcSession.onClose}; `status` collapses all three to `closed`,
+ * and {@link CcSession.onClose}; `status` collapses all four to `closed`,
  * because for everything that merely asks "can I still send to this?" they are
  * the same answer.
  */
-export type CcCloseReason = 'closed' | 'exited' | 'crashed'
+export type CcCloseReason = 'closed' | 'exited' | 'crashed' | 'reaped'
 
 /** Every {@link CcCloseReason}. */
-export const CC_CLOSE_REASONS: readonly CcCloseReason[] = ['closed', 'exited', 'crashed']
+export const CC_CLOSE_REASONS: readonly CcCloseReason[] = ['closed', 'exited', 'crashed', 'reaped']
 
 /**
  * The diagnostics sink a session writes subprocess stderr and lifecycle notes
@@ -249,6 +256,22 @@ export interface CcSessionSnapshot {
   readonly id: CcSessionId
   /** Lifecycle state at snapshot time. */
   readonly status: CcSessionStatus
+  /**
+   * The absolute working directory the session runs in — the single most useful
+   * thing for telling two sessions apart, and the reason it is carried on the
+   * value rather than left inside the actor. A caller staring at four opaque
+   * UUIDs at the concurrency ceiling cannot act on any of them; `/repo/api` vs
+   * `/repo/web` it can.
+   */
+  readonly cwd: string
+  /** Epoch ms the session was constructed (before the SDK handshake). */
+  readonly openedAt: number
+  /**
+   * Epoch ms of the last thing that happened on this session: a send, a message
+   * from the subprocess, or its close. `now - lastActivityAt` is the idle age
+   * the inventory sorts on and the idle sweep (`limits.idleTimeoutMs`) reaps on.
+   */
+  readonly lastActivityAt: number
   /** The model in force, when known — absent while the CLI default applies and the SDK has not yet reported one. */
   readonly model?: string
   /** Number of permission/question asks currently awaiting an answer. */
@@ -278,6 +301,94 @@ export interface CcSessionSnapshot {
    * it. See {@link CcCloseReason}.
    */
   readonly closeReason?: CcCloseReason
+}
+
+/** How to read the session registry. */
+export interface CcListOptions {
+  /**
+   * Also return the recently-closed sessions the service still holds tombstones
+   * for (`CLOSED_SESSION_HISTORY`), newest-closed last. Defaults to false —
+   * `list()` has always meant LIVE sessions, and a caller counting slots against
+   * `limits.maxConcurrentSessions` must not accidentally count corpses.
+   */
+  readonly includeClosed?: boolean
+}
+
+/**
+ * One live session as the concurrency inventory describes it: everything a
+ * caller needs to decide whether THIS is the session it can afford to close.
+ *
+ * A projection of {@link CcSessionSnapshot} with the two clock readings already
+ * subtracted, because the consumer that needs this most is a model, and a model
+ * has no clock to subtract an epoch timestamp with.
+ */
+export interface CcSessionInventoryEntry {
+  /** The shared dsh/CC session id — what you pass to `close()`. */
+  readonly id: CcSessionId
+  /** Its working directory: usually the only thing that identifies whose session this is. */
+  readonly cwd: string
+  /** Lifecycle state at inventory time. */
+  readonly status: CcSessionStatus
+  /** The model in force, when the CLI has reported one. */
+  readonly model?: string
+  /** How long the session has been open, in ms. */
+  readonly ageMs: number
+  /** How long since anything happened on it, in ms. The primary "is this abandoned?" signal. */
+  readonly idleMs: number
+  /** How many asks are awaiting a human answer. Non-zero means DO NOT close this one. */
+  readonly pendingAsks: number
+  /** What those asks are, so the prose can name the tool a person is looking at. */
+  readonly pendingAskDetails: readonly CcPendingAsk[]
+}
+
+/**
+ * The structured payload carried by a `SESSION_LIMIT` refusal: who is holding
+ * the slots, and which one is safe to close.
+ *
+ * This exists because of a real production trace. An agent hit
+ * `limits.maxConcurrentSessions` three times while believing it had opened two
+ * sessions — the other slots were held by sessions from EARLIER runs of the same
+ * host service, one of them parked 1h32m on an approval nobody ever answered.
+ * The refusal named only the limit, so the agent could not tell which sessions
+ * existed, let alone which were abandoned, and closed its own still-wanted plan
+ * session by guesswork.
+ */
+export interface CcSessionLimitInfo {
+  /** The configured ceiling that was reached. */
+  readonly limit: number
+  /** How many sessions are live right now (equal to `limit` at the moment of refusal). */
+  readonly liveCount: number
+  /**
+   * Every live session, sorted best-close-candidate first: sessions with no
+   * pending human ask before sessions with one, idle before actively working,
+   * longest-idle first within each group.
+   */
+  readonly sessions: readonly CcSessionInventoryEntry[]
+  /**
+   * The id the caller should close if it must free a slot, or ABSENT when every
+   * live session has a pending ask — a human may still be deciding on each of
+   * them, and recommending one for closure would throw that decision away.
+   */
+  readonly closeCandidate?: CcSessionId
+}
+
+/**
+ * Machine-readable specifics attached to a {@link ClaudeCodeError}.
+ *
+ * `HarnessError` carries only a `code`, which is enough to ROUTE on and never
+ * enough to ACT on. A consumer that wants the detail behind a refusal otherwise
+ * has to parse the message — and a tool layer parsing prose is a defect waiting
+ * for the first reworded sentence.
+ */
+export interface CcErrorData {
+  /** Present on every `SESSION_LIMIT` refusal: the full live-session inventory. */
+  readonly sessionLimit?: CcSessionLimitInfo
+}
+
+/** Options for {@link ClaudeCodeError}: the standard `cause`, plus structured `data`. */
+export interface ClaudeCodeErrorOptions extends ErrorOptions {
+  /** Machine-readable specifics for this failure; omitted when the code carries none. */
+  readonly data?: CcErrorData
 }
 
 /**
@@ -347,13 +458,24 @@ export type CcErrorCode =
 /** Error taxonomy for the Claude Code seam. */
 export class ClaudeCodeError extends HarnessError {
   /**
+   * Machine-readable specifics, `undefined` when this code carries none.
+   *
+   * Declared explicitly nullable rather than optional: `exactOptionalPropertyTypes`
+   * rejects assigning a possibly-undefined value to `data?: …`, and a field this
+   * is read off in a `catch` must not depend on the constructor having spread it
+   * conditionally.
+   */
+  readonly data: CcErrorData | undefined
+
+  /**
    * @param message - human-readable explanation.
    * @param code - the stable {@link CcErrorCode} consumers route on.
-   * @param options - standard error options (`cause`).
+   * @param options - standard error options (`cause`) plus optional structured `data`.
    */
-  constructor(message: string, code: CcErrorCode, options?: ErrorOptions) {
+  constructor(message: string, code: CcErrorCode, options: ClaudeCodeErrorOptions = {}) {
     super(message, code, options)
     this.name = 'ClaudeCodeError'
+    this.data = options.data
   }
 }
 
@@ -378,9 +500,11 @@ export interface ClaudeCode {
   get(id: CcSessionId): CcSessionSnapshot | undefined
   /**
    * Every session registered in this context, in open order.
+   * @param options - `{ includeClosed: true }` appends the recently-closed
+   *   tombstones; omitted means LIVE sessions only, as it always has.
    * @returns a snapshot array (a fresh array per call; never a live view).
    */
-  list(): readonly CcSessionSnapshot[]
+  list(options?: CcListOptions): readonly CcSessionSnapshot[]
   /**
    * Close one session: settle its pending asks as denied, then close the SDK
    * query. Idempotent.

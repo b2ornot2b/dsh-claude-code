@@ -74,12 +74,20 @@ const EXPECTED_ENTRY_IDS = [
   'claude-code-agent',
 ]
 
-/** The model-facing surface this integration promises (spec §6). */
+/**
+ * The model-facing surface this integration promises (spec §6).
+ *
+ * SEVEN, not six: `claude_code_list` was added because every other tool takes a
+ * `session_id`, which left a model unable to name — or close — a session it had
+ * not opened itself, while `limits.maxConcurrentSessions` is enforced across the
+ * whole host service.
+ */
 const TOOL_NAMES = [
   'claude_code_open',
   'claude_code_send',
   'claude_code_wait',
   'claude_code_status',
+  'claude_code_list',
   'claude_code_cancel',
   'claude_code_close',
 ] as const
@@ -194,9 +202,13 @@ describe('phase 1 acceptance: real cordis.yml + Loader composition', () => {
     expect('timeoutMs' in config.ask).toBe(false)
     expect('ruleCachePath' in config.ask).toBe(false)
     expect('maxBudgetUsd' in config.limits).toBe(false)
+    // Idle reaping is OFF unless an operator asks: the key must resolve ABSENT
+    // through the Loader path, not present-and-null, or the service would
+    // install a sweep in every composition that already exists.
+    expect('idleTimeoutMs' in config.limits).toBe(false)
   })
 
-  it('registers all six claude_code_* tools with complete schemas', () => {
+  it('registers all seven claude_code_* tools with complete schemas', () => {
     expect(ctx.get('tools') !== undefined, 'ctx.tools should resolve').toBe(true)
 
     for (const toolName of TOOL_NAMES) {
@@ -350,7 +362,7 @@ describe('the SAME composition with no jobs runtime', () => {
     await ctx.fiber.dispose()
   })
 
-  it('activates every row and registers all six tools without ctx.jobs', () => {
+  it('activates every row and registers all seven tools without ctx.jobs', () => {
     const broken = [...ctx.loader.entries()]
       .filter(entry => entry.fiber === undefined && !entry.disabled)
       .map(entry => `${entry.options.id} (${String(entry.options.name)})`)

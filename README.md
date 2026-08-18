@@ -82,7 +82,7 @@ Two rules the diagram encodes, both load-bearing:
 | Package | Provides | Read |
 |---|---|---|
 | [`packages/claude-code`](packages/claude-code/README.md) | `ctx.claudeCode` — sessions, ask channel, mirror, config, prewarm pool | seam + provider |
-| [`packages/tool-claude-code`](packages/tool-claude-code/README.md) | `claude_code_open` / `_send` / `_wait` / `_status` / `_cancel` / `_close` | consumer |
+| [`packages/tool-claude-code`](packages/tool-claude-code/README.md) | `claude_code_open` / `_send` / `_wait` / `_status` / `_list` / `_cancel` / `_close` | consumer |
 | [`packages/claude-code-agent`](packages/claude-code-agent/README.md) | `ctx.claudeCodeAgents` — CC-backed `ctx.agents` entries | consumer |
 
 ## Quickstart — the delegation demo

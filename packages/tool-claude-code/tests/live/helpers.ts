@@ -65,6 +65,7 @@ export const TOOL_NAMES = [
   'claude_code_send',
   'claude_code_wait',
   'claude_code_status',
+  'claude_code_list',
   'claude_code_cancel',
   'claude_code_close',
 ] as const
