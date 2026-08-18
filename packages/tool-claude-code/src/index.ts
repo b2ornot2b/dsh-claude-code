@@ -74,6 +74,10 @@ import {
   answerInDshUi, PENDING_ASK_DETAILS_SCHEMA, projectPendingAsks, renderPendingAsks, renderStillRunning,
 } from './pending.ts'
 import type { CcPendingAskProjection } from './pending.ts'
+import {
+  HUMAN_DECISIONS_SCHEMA, projectHumanDecisions, renderDecisionBlock, renderWithDecisions,
+} from './receipts.ts'
+import type { CcHumanDecisionProjection } from './receipts.ts'
 import { projectContextUsage, projectResult } from './result.ts'
 
 export const name = 'tool-claude-code'
@@ -235,6 +239,41 @@ function stillRunning(session: CcSession, sessionId: string): CcStillRunning {
   }
 }
 
+/**
+ * What a HUMAN decided during the turn this call waited on.
+ *
+ * The window is the turn, not the wait: `turnStartedAt` is stamped when the send
+ * that started the turn landed, so an approval a person answered before this
+ * particular `claude_code_wait` call was made is still reported by it. Filtering
+ * on the wait's own start instead would drop exactly the decisions a poller
+ * missed while it was not polling — and the whole point is that a delegating
+ * agent must not have to have been watching.
+ *
+ * The `turnStart` argument is read BEFORE the wait so a follow-up turn that
+ * begins while we are parked cannot move the window forward underneath us.
+ *
+ * An ask can also STRADDLE the boundary: raised during turn N, still on a
+ * human's screen when an interrupt ends that turn, and answered after turn N+1
+ * has already started. The window is the SETTLE time, so turn N+1 reports it —
+ * the settle is the event, and the alternative is a decision that no tool call
+ * ever mentions. It is projected with `asked_in_an_earlier_turn`, and the prose
+ * says "raised during an EARLIER turn", so nothing reads as approval of the
+ * current turn's work.
+ *
+ * @param session - the live actor.
+ * @param turnStart - `session.turnStartedAt` as read before waiting.
+ * @returns the projected decisions of that turn, oldest first (empty when a
+ *   turn ran with no ask settled at all — which is itself worth reporting).
+ */
+function turnDecisions(session: CcSession, turnStart: number | undefined): CcHumanDecisionProjection[] {
+  const snapshot = session.snapshot()
+  // `?? 0` covers the session that never sent anything through this actor (a
+  // resumed transcript, a white-box test): everything the table holds belongs to
+  // the only turn there has been.
+  const since = turnStart ?? snapshot.turnStartedAt ?? 0
+  return projectHumanDecisions(snapshot.recentAsks.filter(receipt => receipt.settledAt >= since), since)
+}
+
 export function apply(ctx: Context, _config: Config = {}): void {
   const defaults = ctx.claudeCode.config.defaults
 
@@ -291,6 +330,12 @@ export function apply(ctx: Context, _config: Config = {}): void {
                   + 'many asks are awaiting a human. The session is open; call claude_code_wait to keep waiting.',
               },
               pending_ask_details: PENDING_ASK_DETAILS_SCHEMA,
+              human_decisions: {
+                ...HUMAN_DECISIONS_SCHEMA,
+                description: 'Present when the opening turn COMPLETED: the asks a human (or a policy) settled '
+                  + 'during it. Report these as what the person actually decided — and never report a '
+                  + '"policy" entry as a human\'s decision. ' + HUMAN_DECISIONS_SCHEMA.description,
+              },
             },
           },
           {
@@ -313,8 +358,11 @@ export function apply(ctx: Context, _config: Config = {}): void {
           // and absent on every completed (or idle) open.
           : value.pending_asks !== undefined
             ? renderStillRunning(value.session_id, value.status, value.pending_ask_details ?? [])
-            : `session ${value.session_id} (${value.status})`
-              + (value.result === undefined ? '' : `\n\n${value.result}`),
+            : renderWithDecisions(
+                `session ${value.session_id} (${value.status})`
+                + (value.result === undefined ? '' : `\n\n${value.result}`),
+                value.human_decisions ?? [],
+                'during this opening turn'),
       } satisfies ContentBlock],
     },
     async execute(args, exec) {
@@ -336,6 +384,10 @@ export function apply(ctx: Context, _config: Config = {}): void {
       if (!opened.prompted) {
         return { kind: 'session' as const, session_id: opened.id, status: opened.session.status }
       }
+      // Read BEFORE the wait: `openSession` already sent the prompt, so this is
+      // the opening turn's own start, and a queued follow-up that starts a
+      // second turn while we are parked cannot move it.
+      const turnStart = opened.session.turnStartedAt
       const envelope = await waitCapped(opened.session, SYNC_OPEN_TIMEOUT_MS)
       // Expiry is NOT a failure and does not close anything: the session is
       // open, the turn is still going, and — usually — a human simply has not
@@ -349,6 +401,10 @@ export function apply(ctx: Context, _config: Config = {}): void {
         session_id: opened.id,
         status: opened.session.status,
         ...projectResult(envelope),
+        // Always present on a completed turn, empty included: "no human was
+        // involved in this turn" is evidence too, and an ABSENT array would let
+        // a model read "the tools cannot tell me" as "a human approved".
+        human_decisions: turnDecisions(opened.session, turnStart),
       }
     },
     presentCall: args => genericCall(`Open Claude Code session in ${args.cwd}`, args.resume ?? args.cwd),
@@ -432,23 +488,33 @@ export function apply(ctx: Context, _config: Config = {}): void {
               + 'awaiting a human answer in the dsh UI.',
           },
           pending_ask_details: PENDING_ASK_DETAILS_SCHEMA,
+          human_decisions: {
+            ...HUMAN_DECISIONS_SCHEMA,
+            description: 'Present when the turn COMPLETED: every ask settled during that turn, and WHO settled '
+              + 'it. This is the only evidence that a person approved, rejected or answered anything — a tool '
+              + 'call that simply happened proves nothing about who allowed it. ' + HUMAN_DECISIONS_SCHEMA.description,
+          },
         },
       },
       render: (_args, value) => [{
         type: 'text',
         // Three cases, in the order they matter. A finished turn renders its
-        // answer exactly as it always has. An elapsed wait renders the
-        // human-in-the-loop guidance — the string this whole change exists for.
-        // A turn that finished with no text (an interrupted turn) renders its
-        // status, as before.
-        text: value.result
-          ?? (value.pending_asks === undefined
-            ? `status: ${value.status}`
-            : renderStillRunning(value.session_id ?? '', value.status, value.pending_ask_details ?? [])),
+        // answer exactly as it always has, now led by what a human decided
+        // during it. An elapsed wait renders the human-in-the-loop guidance —
+        // the string the pending-ask change exists for. A turn that finished
+        // with no text (an interrupted turn) renders its status, as before.
+        text: value.pending_asks !== undefined && value.result === undefined
+          ? renderStillRunning(value.session_id ?? '', value.status, value.pending_ask_details ?? [])
+          : renderWithDecisions(
+              value.result ?? `status: ${value.status}`,
+              value.human_decisions ?? [],
+              'this turn'),
       } satisfies ContentBlock],
     },
     async execute(args) {
       const session = requireSession(ctx, args.session_id)
+      // Read BEFORE the wait: see `turnDecisions`.
+      const turnStart = session.turnStartedAt
       const envelope = await waitCapped(session, effectiveWait(args.timeout_ms))
       // The regression the production trace demands: RESOLVE, do not reject.
       // A thrown timeout reads as "this session is broken" and the delegating
@@ -456,7 +522,11 @@ export function apply(ctx: Context, _config: Config = {}): void {
       // it waits again — which is the only thing that can actually work while a
       // human has not clicked approve.
       if (envelope === undefined) return stillRunning(session, args.session_id)
-      return { status: session.status, ...projectResult(envelope) }
+      return {
+        status: session.status,
+        ...projectResult(envelope),
+        human_decisions: turnDecisions(session, turnStart),
+      }
     },
     presentCall: args => genericCall(`Wait for Claude Code session ${args.session_id}`),
   }))
@@ -484,6 +554,12 @@ export function apply(ctx: Context, _config: Config = {}): void {
           },
           pending_asks: { type: 'integer', required: true, description: 'Number of permission/question asks currently awaiting an answer.' },
           pending_ask_details: { ...PENDING_ASK_DETAILS_SCHEMA, required: true },
+          human_decisions: {
+            ...HUMAN_DECISIONS_SCHEMA,
+            required: true,
+            description: 'Always present, empty when nothing has settled: the recent asks a human (or a policy) '
+              + 'decided on this session, oldest first. ' + HUMAN_DECISIONS_SCHEMA.description,
+          },
           context_usage: {
             type: 'object',
             additionalProperties: false,
@@ -505,7 +581,13 @@ export function apply(ctx: Context, _config: Config = {}): void {
           // who has to act.
           + (value.pending_ask_details.length === 0
             ? ''
-            : `\n${renderPendingAsks(value.pending_ask_details)}\n${answerInDshUi(args.session_id)}`),
+            : `\n${renderPendingAsks(value.pending_ask_details)}\n${answerInDshUi(args.session_id)}`)
+          // What has already been DECIDED, and by whom. A status read is where
+          // an agent reconstructs what happened while it was not looking, and
+          // it used to find no trace of the human at all.
+          + (value.human_decisions.length === 0
+            ? ''
+            : `\n${renderDecisionBlock(value.human_decisions, 'on this session')}`),
       } satisfies ContentBlock],
     },
     async execute(args) {
@@ -540,6 +622,11 @@ export function apply(ctx: Context, _config: Config = {}): void {
         // Always present, empty when nothing pends: an absent array would make
         // "nothing is pending" and "this build cannot tell you" the same value.
         pending_ask_details: projectPendingAsks(snapshot.pendingAskDetails, Date.now()),
+        // A CLOSED session still reports its receipts: `entomb()` keeps the
+        // actor's final snapshot, so "what did the human decide before this
+        // session ended" survives the session itself — which is exactly when
+        // somebody asks.
+        human_decisions: projectHumanDecisions(snapshot.recentAsks),
         ...(contextUsage === undefined ? {} : { context_usage: contextUsage }),
       })
     },
@@ -610,11 +697,17 @@ export function apply(ctx: Context, _config: Config = {}): void {
           },
         },
       },
+      // `still_queued` is ALWAYS stated, including when it is empty. The old
+      // render omitted the empty case entirely, and the operator's delegating
+      // agent read "cancelled session X" as "no still_queued value was
+      // returned" — then reported the step as PARTIAL because it could not
+      // confirm the very thing the tool had just told it. Zero is an answer.
       render: (args, value) => [{
         type: 'text',
         text: value.still_queued.length > 0
-          ? `cancelled session ${args.session_id}; still queued: ${value.still_queued.join(', ')}`
-          : `cancelled session ${args.session_id}`,
+          ? `cancelled session ${args.session_id}; ${value.still_queued.length} queued message(s) survived and `
+            + `will still run — still_queued: ${value.still_queued.join(', ')}`
+          : `cancelled session ${args.session_id}; still_queued is empty: 0 queued messages survived this cancel.`,
       } satisfies ContentBlock],
     },
     async execute(args) {

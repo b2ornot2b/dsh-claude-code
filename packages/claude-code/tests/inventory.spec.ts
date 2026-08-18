@@ -43,6 +43,7 @@ function snapshot(
     ...(overrides.model === undefined ? {} : { model: overrides.model }),
     pendingAsks: pending.length,
     pendingAskDetails: pending,
+    recentAsks: [],
   }
 }
 

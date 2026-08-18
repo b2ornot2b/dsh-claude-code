@@ -41,11 +41,11 @@ import type {
 import type { CcCanUseTool, CcPermissionDecision, CcPermissionRequest } from '../backend.ts'
 import type { ResolvedClaudeCodeConfig } from '../config.ts'
 import type { CcLogger, ClaudeCodeError } from '../types.ts'
-import { applyAskFallback } from './fallback.ts'
+import { applyAskFallback, describeReason } from './fallback.ts'
 import type { CcAskFallbackReason, CcAskKind } from './fallback.ts'
 import type { CcAskRules } from './rules.ts'
 import { CcAskTable } from './table.ts'
-import type { CcPendingAsk, CcPendingAskKind } from './table.ts'
+import type { CcAskAnswer, CcAskOutcome, CcAskReceipt, CcPendingAsk, CcPendingAskKind } from './table.ts'
 import { askErrorCode, describeError } from './types.ts'
 import type { ApprovalOutcome, CcAskCallSite, CcAskServices, CcAskTarget } from './types.ts'
 
@@ -81,6 +81,9 @@ const MAX_REASON_LENGTH = 240
 
 /** Longest `header` passed through to dsh (CC caps its own at ~12; this is belt and braces). */
 const MAX_HEADER_LENGTH = 64
+
+/** Longest receipt `detail` this router records (a human's choice, not a transcript). */
+const MAX_DETAIL_LENGTH = 240
 
 /** Everything the router needs. */
 export interface CcAskRouterDeps {
@@ -180,6 +183,30 @@ export class CcAskRouter {
     return this.#table.pending()
   }
 
+  /**
+   * What has already been DECIDED on this session, newest last and bounded:
+   * one receipt per settled ask, saying how it ended and whether a human ended
+   * it (§4.4d).
+   *
+   * Pending asks were made visible first, because an agent that cannot see them
+   * respawns sessions. This is the other half: an agent that cannot see SETTLED
+   * asks grades a working integration as broken — it cannot tell "a human chose
+   * hola" from "Claude invented hola", or "the human approved the plan" from
+   * "plan mode never engaged".
+   */
+  get recentAsks(): readonly CcAskReceipt[] {
+    return this.#table.receipts()
+  }
+
+  /**
+   * The receipts for asks settled at or after `since` (a turn's start).
+   * @param since - epoch ms.
+   * @returns the matching receipts, newest last.
+   */
+  recentAsksSince(since: number): readonly CcAskReceipt[] {
+    return this.#table.receiptsSince(since)
+  }
+
   /** Who currently answers for this session, if anyone. */
   get target(): CcAskTarget | undefined {
     return this.#target
@@ -237,7 +264,8 @@ export class CcAskRouter {
    * @param toolName - the tool.
    * @param input - its arguments.
    * @param request - the SDK request context.
-   * @returns the decision.
+   * @returns the decision. Every path also produces a {@link CcAskAnswer}, so
+   *   the table can receipt WHO decided it (§4.4d).
    */
   private async route(
     toolName: string,
@@ -319,7 +347,8 @@ export class CcAskRouter {
    * @param reason - the one-line description of what is being approved, computed
    *   by {@link askReason} in `route` so the pending-ask table and the dsh
    *   approval prompt carry the SAME words.
-   * @returns the decision, mapped EXACTLY per §4.1's outcome table.
+   * @returns the decision, mapped EXACTLY per §4.1's outcome table, with the
+   *   receipt attribution the settled-ask record needs.
    */
   private async requestApproval(
     toolName: string,
@@ -327,7 +356,7 @@ export class CcAskRouter {
     request: CcPermissionRequest,
     signal: AbortSignal,
     reason: string,
-  ): Promise<CcPermissionDecision> {
+  ): Promise<CcAskAnswer> {
     // 1. The integration-owned rule cache, BEFORE any prompt. A prompt forced by
     //    the user's own `permissions.ask` rule is never short-circuited: that
     //    rule is the user asking to be asked.
@@ -335,7 +364,15 @@ export class CcAskRouter {
       this.#deps.logger?.debug(
         `claude-code ask: ${toolName} allowed by the stored always-allow rule cache `
         + `(${this.#deps.rules.path}) — no dsh approval was requested`)
-      return { behavior: 'allow', updatedInput: input }
+      // A grant nobody was asked for. It is a legitimate grant (a human stored
+      // the rule earlier), but it is NOT a decision made now, and a consumer
+      // that reported it as one would be inventing a human.
+      return {
+        decision: { behavior: 'allow', updatedInput: input },
+        outcome: 'allowed',
+        source: 'policy',
+        detail: 'allowed automatically by the stored always-allow rule cache; nobody was asked this time',
+      }
     }
 
     const target = this.#target
@@ -348,8 +385,13 @@ export class CcAskRouter {
         : 'no approval service is mounted in this composition'
       this.#deps.logger?.debug(`claude-code ask: denying ${toolName} — ${why}`)
       return {
-        behavior: 'deny',
-        message: `Denied: ${why}, so this tool call could not be approved. Nothing was executed.`,
+        decision: {
+          behavior: 'deny',
+          message: `Denied: ${why}, so this tool call could not be approved. Nothing was executed.`,
+        },
+        outcome: 'unavailable',
+        source: 'policy',
+        detail: `${why}, so nobody could be asked`,
       }
     }
 
@@ -361,7 +403,12 @@ export class CcAskRouter {
     if (signal.aborted) {
       this.#deps.logger?.debug(
         `claude-code ask: ${toolName} was withdrawn while its tool/call was being correlated; not asking dsh`)
-      return { behavior: 'deny', message: CC_CANCELLED_MESSAGE }
+      return {
+        decision: { behavior: 'deny', message: CC_CANCELLED_MESSAGE },
+        outcome: 'cancelled',
+        source: 'policy',
+        detail: 'the request was withdrawn before it reached a human',
+      }
     }
 
     let outcome: ApprovalOutcome
@@ -381,23 +428,39 @@ export class CcAskRouter {
       this.#deps.logger?.debug(
         `claude-code ask: approval for ${toolName} could not be requested: ${detail}`)
       return {
-        behavior: 'deny',
-        message: `Denied: the dsh approval channel is not accepting requests right now (${detail}). `
-          + 'This usually means the calling agent has no turn open, so nobody can be asked. '
-          + 'Nothing was executed — report this instead of retrying.',
+        decision: {
+          behavior: 'deny',
+          message: `Denied: the dsh approval channel is not accepting requests right now (${detail}). `
+            + 'This usually means the calling agent has no turn open, so nobody can be asked. '
+            + 'Nothing was executed — report this instead of retrying.',
+        },
+        outcome: 'unavailable',
+        source: 'policy',
+        detail: `the dsh approval channel refused the request (${detail}), so nobody was asked`,
       }
     }
 
     switch (outcome) {
       case 'allowed-once':
-        // ALWAYS with `updatedInput`.
-        return { behavior: 'allow', updatedInput: input }
+        // ALWAYS with `updatedInput`. A dsh answerer returned this, so a person
+        // (or the session policy standing in for them) said yes.
+        return { decision: { behavior: 'allow', updatedInput: input }, outcome: 'allowed', source: 'human' }
       case 'rejected':
-        // Also the deterministic answer under session policy `'never'`, which is
-        // a real decision and must never be second-guessed by the fallback.
-        return { behavior: 'deny', message: CC_REJECTED_MESSAGE }
+        // A DECISION, never second-guessed by the fallback. `policy: 'never'`
+        // folds into the same outcome and is indistinguishable here — the
+        // approval seam reports one word — so it is reported as a decision,
+        // which is what it is: the human's standing answer for this session.
+        return { decision: { behavior: 'deny', message: CC_REJECTED_MESSAGE }, outcome: 'rejected', source: 'human' }
       case 'cancelled':
-        return { behavior: 'deny', message: CC_CANCELLED_MESSAGE }
+        // Dismissed or withdrawn. NOT attributed to a human: the same word
+        // covers "the prompt was taken down" and "the human closed it", and a
+        // consumer must never turn the ambiguous case into "they said no".
+        return {
+          decision: { behavior: 'deny', message: CC_CANCELLED_MESSAGE },
+          outcome: 'cancelled',
+          source: 'policy',
+          detail: 'the approval prompt was dismissed or withdrawn before any decision was recorded',
+        }
       default:
         // `'unavailable'` — and any rogue value, which the seam already
         // normalizes to it.
@@ -416,7 +479,7 @@ export class CcAskRouter {
   private async askQuestions(
     input: Record<string, unknown>,
     signal: AbortSignal,
-  ): Promise<CcPermissionDecision> {
+  ): Promise<CcAskAnswer> {
     const questions = mapQuestions(input, this.#deps.logger)
     const autoAnswer = (): CcPermissionDecision | undefined => firstOptionAnswer(input, questions)
 
@@ -446,9 +509,18 @@ export class CcAskRouter {
     }
 
     const answers = mapAnswers(questions, answer, this.#deps.logger)
+    // The human's ACTUAL words. Without this a delegating agent sees only that
+    // the tool call succeeded and cannot tell a person's choice from one the
+    // model made up — the exact misreport this receipt exists to prevent.
+    const chose = describeAnswers(answers)
     // `questions` goes back UNCHANGED: the tool needs it to process the answer
     // (probe 2), and `answers` is keyed by question TEXT.
-    return { behavior: 'allow', updatedInput: { questions: input['questions'], answers } }
+    return {
+      decision: { behavior: 'allow', updatedInput: { questions: input['questions'], answers } },
+      outcome: 'answered',
+      source: 'human',
+      ...(chose === undefined ? {} : { detail: chose }),
+    }
   }
 
   /**
@@ -464,7 +536,7 @@ export class CcAskRouter {
   private async reviewPlan(
     input: Record<string, unknown>,
     signal: AbortSignal,
-  ): Promise<CcPermissionDecision> {
+  ): Promise<CcAskAnswer> {
     const target = this.#target
     const seam = target?.userQuestions ?? this.#deps.services.userQuestions()
     if (target === undefined || seam === undefined) {
@@ -492,11 +564,18 @@ export class CcAskRouter {
     } catch (error) {
       if (askErrorCode(error) === 'ASK_CANCELLED') {
         // Dismissed is not declined: the user took the turn back to say
-        // something the two options do not cover.
+        // something the two options do not cover. `ASK_CANCELLED` is raised by
+        // the UI provider when the PERSON closes the prompt (an abort raises
+        // `ASK_ABORTED` instead), so this really is a human's doing.
         return {
-          behavior: 'deny',
-          message: 'Plan review dismissed: the user closed the review to speak instead. '
-            + 'Stay in plan mode, stop here, and wait for their message.',
+          decision: {
+            behavior: 'deny',
+            message: 'Plan review dismissed: the user closed the review to speak instead. '
+              + 'Stay in plan mode, stop here, and wait for their message.',
+          },
+          outcome: 'cancelled',
+          source: 'human',
+          detail: 'the human closed the plan review to speak instead of choosing an option',
         }
       }
       return this.questionFailure('plan', CC_EXIT_PLAN_MODE, error)
@@ -508,14 +587,28 @@ export class CcAskRouter {
       && item.selected.length === 1
       && item.selected[0] === CC_PLAN_APPROVE_LABEL
       && item.custom === undefined
-    if (approved) return { behavior: 'allow', updatedInput: input }
+    if (approved) {
+      return {
+        decision: { behavior: 'allow', updatedInput: input },
+        outcome: 'allowed',
+        source: 'human',
+        detail: `the human chose "${CC_PLAN_APPROVE_LABEL}" in the plan review`,
+      }
+    }
 
     const feedback = item?.custom?.trim() ?? ''
     return {
-      behavior: 'deny',
-      message: feedback === ''
-        ? 'The user chose to keep planning; revise the plan and present it again.'
-        : `The user chose to keep planning; their feedback: ${feedback}`,
+      decision: {
+        behavior: 'deny',
+        message: feedback === ''
+          ? 'The user chose to keep planning; revise the plan and present it again.'
+          : `The user chose to keep planning; their feedback: ${feedback}`,
+      },
+      outcome: 'rejected',
+      source: 'human',
+      detail: feedback === ''
+        ? `the human chose "${CC_PLAN_DECLINE_LABEL}" with no further feedback`
+        : `the human chose "${CC_PLAN_DECLINE_LABEL}"; their feedback: ${truncate(feedback, MAX_DETAIL_LENGTH)}`,
     }
   }
 
@@ -532,7 +625,7 @@ export class CcAskRouter {
     toolName: string,
     error: unknown,
     autoAnswer?: () => CcPermissionDecision | undefined,
-  ): CcPermissionDecision {
+  ): CcAskAnswer {
     const reason: CcAskFallbackReason = {
       kind: 'question-error',
       code: askErrorCode(error) ?? 'UNKNOWN',
@@ -548,14 +641,16 @@ export class CcAskRouter {
    * @param toolName - the tool being decided.
    * @param reason - why no answer could be reached.
    * @param autoAnswer - the `first-option` builder, when the path has one.
-   * @returns the decision.
+   * @returns the decision, receipted as a POLICY settle — no human answered any
+   *   ask that reaches this method, including the `first-option` path, which
+   *   puts words in a human's mouth and must say so.
    */
   private fallback(
     kind: CcAskKind,
     toolName: string,
     reason: CcAskFallbackReason,
     autoAnswer?: () => CcPermissionDecision | undefined,
-  ): CcPermissionDecision {
+  ): CcAskAnswer {
     const result = applyAskFallback({
       policy: this.#deps.config.ask.fallback,
       kind,
@@ -565,7 +660,15 @@ export class CcAskRouter {
       ...(autoAnswer === undefined ? {} : { autoAnswer }),
     })
     if (result.error !== undefined) this.emitError(result.error)
-    return result.decision
+    const why = describeReason(reason)
+    return {
+      decision: result.decision,
+      outcome: fallbackOutcome(reason, result.decision),
+      source: 'policy',
+      detail: result.decision.behavior === 'allow'
+        ? `auto-answered with the first option by the "first-option" fallback policy (${why}); no human answered`
+        : `denied by the "${this.#deps.config.ask.fallback}" fallback policy (${why}); no human answered`,
+    }
   }
 
   /**
@@ -704,6 +807,53 @@ function pendingKind(kind: CcAskKind): CcPendingAskKind {
     case 'approval':
       return 'permission'
   }
+}
+
+/**
+ * Which {@link CcAskOutcome} a fallback settle is.
+ *
+ * All four reasons are POLICY settles; this only says WHICH kind, so a reader
+ * can tell "nobody answered in time" from "nobody could be asked at all" from
+ * "the policy refused". An allow can only come from `first-option`, which did
+ * answer the question — with nobody's opinion but the option order's.
+ *
+ * @param reason - why no answer could be reached.
+ * @param decision - what the policy produced.
+ * @returns the outcome to receipt.
+ */
+function fallbackOutcome(reason: CcAskFallbackReason, decision: CcPermissionDecision): CcAskOutcome {
+  if (decision.behavior === 'allow') return 'answered'
+  switch (reason.kind) {
+    case 'timeout':
+      return 'timed-out'
+    case 'approval-unavailable':
+    case 'no-service':
+      return 'unavailable'
+    case 'question-error':
+      return 'fallback-denied'
+  }
+}
+
+/**
+ * Render what a human actually chose, for {@link CcAskReceipt.detail}.
+ *
+ * The `answers` object is keyed by question TEXT and holds either the selected
+ * label(s) or the custom text the person typed — which is precisely the thing a
+ * delegating agent otherwise has no way to see. One question renders as the bare
+ * choice (`hola`), several as `question: choice` pairs, all bounded.
+ *
+ * @param answers - CC's `answers` object as `mapAnswers` built it.
+ * @returns the one-line description, or undefined when nothing was answered.
+ */
+function describeAnswers(answers: Record<string, string | string[]>): string | undefined {
+  const entries = Object.entries(answers)
+  if (entries.length === 0) return undefined
+  const render = (value: string | string[]): string => Array.isArray(value) ? value.join(', ') : value
+  const rendered = entries.length === 1 && entries[0] !== undefined
+    ? render(entries[0][1])
+    : entries.map(([question, value]) => `${question}: ${render(value)}`).join('; ')
+  const collapsed = rendered.replace(/\s+/gu, ' ').trim()
+  return collapsed === '' ? undefined : truncate(collapsed, MAX_DETAIL_LENGTH)
 }
 
 /**

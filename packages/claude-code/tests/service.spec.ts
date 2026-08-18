@@ -193,6 +193,9 @@ describe('ClaudeCodeService teardown (HMR safety)', () => {
       status: 'idle',
       pendingAsks: 0,
       pendingAskDetails: [],
+      // Same reasoning for the settled-ask receipts: a record with no actor has
+      // no ask table, so nothing was ever decided on it.
+      recentAsks: [],
     }])
 
     await fiber.dispose()

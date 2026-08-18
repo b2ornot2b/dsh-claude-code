@@ -14,7 +14,7 @@ import { HarnessError } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type { Session as DshSession } from '@deepseek-ai/dsh-session'
 
-import type { CcPendingAsk } from './ask/table.ts'
+import type { CcAskReceipt, CcPendingAsk } from './ask/table.ts'
 import type { CcAskTarget } from './ask/types.ts'
 import type { CcMirrorHandle, CcMirrorOptions } from './mirror.ts'
 
@@ -288,6 +288,32 @@ export interface CcSessionSnapshot {
    * blocked on an unanswered approval nobody upstream could name.
    */
   readonly pendingAskDetails: readonly CcPendingAsk[]
+  /**
+   * What has already been DECIDED, newest last: one {@link CcAskReceipt} per
+   * settled ask, bounded to the last 20 of them (the ask table's receipt ring).
+   *
+   * `pendingAskDetails` made the WAITING visible; this makes the ANSWER visible.
+   * Permission approvals, clarifying questions and plan reviews are all answered
+   * by a person in the dsh UI, and once answered they left no trace at all — so
+   * a delegating agent could not distinguish "a human chose hola" from "Claude
+   * invented hola", nor "the human approved the plan" from "plan mode never
+   * engaged", and graded a correct system as broken. Each receipt says how the
+   * ask ended AND whether a human (`source: 'human'`) or a policy
+   * (`source: 'policy'` — fallback, timeout, rule cache, session close) ended it.
+   *
+   * Always present, empty when nothing has settled: an absent array would make
+   * "nothing was decided" and "this build cannot tell you" the same value.
+   */
+  readonly recentAsks: readonly CcAskReceipt[]
+  /**
+   * Epoch ms the current (or most recent) turn started; ABSENT until the
+   * session's first send.
+   *
+   * Carried so a consumer can filter {@link CcSessionSnapshot.recentAsks} down
+   * to the turn it actually waited on (`settledAt >= turnStartedAt`) instead of
+   * reporting a previous turn's decisions as this one's.
+   */
+  readonly turnStartedAt?: number
   /** Context-window occupancy, when the session has reported usage. */
   readonly contextUsage?: CcContextUsage
   /**

@@ -33,10 +33,12 @@ export {
 export type { CcAskRule, CcAskRuleFile, CcAskRulesDeps } from './ask/rules.ts'
 
 export {
-  ASK_SESSION_CLOSED_MESSAGE, ASK_WITHDRAWN_MESSAGE, CC_PENDING_ASK_KINDS, CcAskTable,
+  ASK_SESSION_CLOSED_DETAIL, ASK_SESSION_CLOSED_MESSAGE, ASK_WITHDRAWN_DETAIL, ASK_WITHDRAWN_MESSAGE,
+  CC_ASK_OUTCOMES, CC_ASK_SOURCES, CC_PENDING_ASK_KINDS, CcAskTable, DEFAULT_RECEIPT_LIMIT,
 } from './ask/table.ts'
 export type {
-  CcAskRunSpec, CcAskSettleCause, CcAskTableDeps, CcPendingAsk, CcPendingAskKind,
+  CcAskAnswer, CcAskOutcome, CcAskReceipt, CcAskRunSpec, CcAskSettleCause, CcAskSource, CcAskTableDeps,
+  CcPendingAsk, CcPendingAskKind,
 } from './ask/table.ts'
 
 export { askErrorCode, CC_ASK_ERROR_CODES } from './ask/types.ts'

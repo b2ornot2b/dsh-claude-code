@@ -220,13 +220,15 @@ describe('claude_code_wait: an elapsed wait resolves', () => {
       })
       const waited = await pending
 
-      // The happy path is byte-identical to before this change: no session_id,
-      // no pending_asks, no pending_ask_details bolted onto a finished turn.
+      // The happy path keeps its shape: no session_id, no pending_asks, no
+      // pending_ask_details bolted onto a finished turn. `human_decisions` IS
+      // carried — empty here, because no ask settled during this turn.
       expect(waited.value).toEqual({
         status: 'idle',
         result: 'all done',
         usage: { input_tokens: 7, output_tokens: 3 },
         cost_usd: 0.5,
+        human_decisions: [],
       })
       expect(text(waited)).toBe('all done')
     } finally {
@@ -268,6 +270,7 @@ describe('claude_code_wait: the photo finish', () => {
         result: 'all done',
         usage: { input_tokens: 7, output_tokens: 3 },
         cost_usd: 0.5,
+        human_decisions: [],
       })
       expect(text(waited)).toBe('all done')
     } finally {
@@ -480,7 +483,9 @@ describe('claude_code_status: what is pending, not just how many', () => {
       const status = await harness.call('claude_code_status', { session_id: sessionId })
       // Absent would make "nothing is pending" indistinguishable from "this
       // build cannot tell you".
-      expect(status.value).toEqual({ status: 'idle', pending_asks: 0, pending_ask_details: [] })
+      expect(status.value).toEqual({
+        status: 'idle', pending_asks: 0, pending_ask_details: [], human_decisions: [],
+      })
       // …and the guidance block stays out of the way when there is nothing to say.
       expect(text(status)).toBe(`session ${sessionId}: idle, 0 pending ask(s)`)
     } finally {

@@ -90,6 +90,10 @@ describe('claude_code_open (synchronous)', () => {
         result: 'two sentences about the ocean',
         usage: { input_tokens: 120, output_tokens: 34 },
         cost_usd: 0.0123,
+        // Additive since the human-decision receipts landed: a completed turn
+        // always states what a human decided during it, empty included — "no
+        // human was involved" is evidence too.
+        human_decisions: [],
       })
       // The prompt reached the subprocess uuid-stamped, exactly once.
       expect(query.sent.map(message => message.message.content)).toEqual(['summarize this repo'])
@@ -232,6 +236,7 @@ describe('claude_code_send / wait / status / cancel / close', () => {
         result: 'all done',
         usage: { input_tokens: 7, output_tokens: 3 },
         cost_usd: 0.5,
+        human_decisions: [],
       })
     } finally {
       await harness.dispose()
@@ -289,6 +294,7 @@ describe('claude_code_send / wait / status / cancel / close', () => {
         status: 'idle',
         pending_asks: 0,
         pending_ask_details: [],
+        human_decisions: [],
         context_usage: { used_tokens: 160, max_tokens: 200_000 },
       })
     } finally {
@@ -302,7 +308,9 @@ describe('claude_code_send / wait / status / cancel / close', () => {
       const opened = await harness.call('claude_code_open', { cwd: CWD })
       const sessionId = (opened.value as { session_id: string }).session_id
       const status = await harness.call('claude_code_status', { session_id: sessionId })
-      expect(status.value).toEqual({ status: 'idle', pending_asks: 0, pending_ask_details: [] })
+      expect(status.value).toEqual({
+        status: 'idle', pending_asks: 0, pending_ask_details: [], human_decisions: [],
+      })
     } finally {
       await harness.dispose()
     }
