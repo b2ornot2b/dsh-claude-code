@@ -13,6 +13,19 @@
  * OPTIONAL fields (`result`, `usage`, `cost_usd`) because synchronous mode now
  * returns the turn it waited for, and nothing was removed or retyped.
  *
+ * **Human-in-the-loop ergonomics.** An unfinished turn is not a failure here: a
+ * Claude Code session routinely sits still because a person has not answered a
+ * permission prompt in the dsh UI yet. So `claude_code_wait` defaults to a
+ * ONE-MINUTE wait ({@link DEFAULT_WAIT_TIMEOUT_MS}) and, on expiry, RESOLVES
+ * with `status: 'running'` plus `pending_asks`/`pending_ask_details` naming the
+ * tool and the reason a human is looking at; synchronous `claude_code_open`
+ * does the same at its own ceiling. Both used to throw `CC_TIMEOUT`, which a
+ * delegating model reasonably read as "this session is broken" — and then
+ * cancelled the turn and opened a fresh session, repeatedly, while the original
+ * approval sat unanswered. The schema additions are strictly additive (new
+ * optional fields on the existing branches, plus a required-and-always-present
+ * `pending_ask_details` on `claude_code_status`).
+ *
  * What this plugin does NOT do, on purpose:
  *
  * - **No permission policy** (delta D13). Policy over *these* tools belongs in
@@ -40,15 +53,19 @@ import {
   CC_PERMISSION_MODES,
   CC_SESSION_STATUSES,
 } from '@deepseek-ai/dsh-claude-code'
-import type { CcMessageEnvelope, CcSession, CcSessionId } from '@deepseek-ai/dsh-claude-code'
+import type { CcMessageEnvelope, CcSession, CcSessionId, CcSessionSnapshot } from '@deepseek-ai/dsh-claude-code'
 // Side-effect type-only imports: they contribute the `Context` augmentations
 // this plugin reads opportunistically (`ctx.jobs`), and they are erased at
 // runtime, so a composition without a jobs runtime still mounts.
 import type {} from '@deepseek-ai/dsh-jobs'
 
 import { startBackgroundSession } from './background.ts'
-import { abortedError, ClaudeCodeToolError, errorCode } from './errors.ts'
+import { abortedError, errorCode } from './errors.ts'
 import { noSuchSession, openSession, requireSession } from './open.ts'
+import {
+  answerInDshUi, PENDING_ASK_DETAILS_SCHEMA, projectPendingAsks, renderPendingAsks, renderStillRunning,
+} from './pending.ts'
+import type { CcPendingAskProjection } from './pending.ts'
 import { projectContextUsage, projectResult } from './result.ts'
 
 export const name = 'tool-claude-code'
@@ -66,12 +83,30 @@ export const Config: z<Config> = z.object({})
  *
  * Ten minutes is the same ceiling `@deepseek-ai/dsh-tool-jobs` puts on a bounded
  * job wait. A cap has to exist: a tool call that never returns holds the
- * caller's turn open forever, and the honest failure — "still running, here is
- * the id" — is strictly more useful than a hang.
+ * caller's turn open forever, and the honest answer — "still running, here is
+ * the id, here is what a human must approve" — is strictly more useful than a
+ * hang. It stays at ten minutes because an OPEN is a one-shot the caller cannot
+ * cheaply retry: unlike `claude_code_wait`, coming back early costs a whole
+ * extra tool call to learn the id it already has.
  */
 export const SYNC_OPEN_TIMEOUT_MS = 600_000
 
-/** Hard ceiling for `claude_code_wait`, applied to an absent AND to an oversized `timeout_ms`. */
+/**
+ * What `claude_code_wait` waits when the model supplies no `timeout_ms`.
+ *
+ * One minute, NOT the ten-minute ceiling — and this is the single most
+ * behaviourally significant number in this package. A poll that resolves in a
+ * minute with "still running, blocked on `Write: /tmp/notes.txt`, a human must
+ * answer" gives the caller something to report and something to do. A poll that
+ * blocks for ten minutes and then throws gives it neither, and the production
+ * trace shows exactly what a model does with that: it cancels and re-opens.
+ *
+ * A model that wants a longer block can still ask for one — up to
+ * {@link MAX_WAIT_TIMEOUT_MS}.
+ */
+export const DEFAULT_WAIT_TIMEOUT_MS = 60_000
+
+/** Hard ceiling for `claude_code_wait`, applied to an oversized explicit `timeout_ms`. */
 export const MAX_WAIT_TIMEOUT_MS = 600_000
 
 /** Pure pending-call card shared by every tool below: a titled, category-iconed generic card. */
@@ -85,47 +120,111 @@ function genericCall(title: string, rawInput?: unknown): GenericCallView {
 }
 
 /**
- * Wait for a turn under a tool-layer cap, translating the seam's `TIMEOUT` into
- * this layer's `CC_TIMEOUT` — which names the still-open session so the caller
- * can wait again, cancel the turn, or close it.
+ * Wait for a turn under a tool-layer cap, reporting expiry as `undefined`
+ * rather than as a throw.
+ *
+ * **`undefined` is not a failure and must never be rendered as one.** "The turn
+ * has not finished because a human has not answered the permission prompt yet"
+ * is the EXPECTED steady state of this integration, and the seam's `TIMEOUT` is
+ * how the actor says "your bounded wait elapsed", not "something broke". The
+ * previous version rethrew it as `CC_TIMEOUT`; the caller — a model, reading a
+ * tool error — did the reasonable thing with a failure and threw the session
+ * away. Callers turn this `undefined` into a `status: 'running'` value carrying
+ * the pending asks instead.
  *
  * The code is read off the thrown value rather than checked with `instanceof`:
  * two copies of a package on two resolution planes make identity checks
  * silently false.
+ *
+ * **The photo-finish is resolved in the result's favour.** The seam's timeout is
+ * a `setTimeout` that rejects a parked waiter; a result landing in the same tick
+ * loses the race by microtasks and the caller would be told "still running"
+ * about a turn that has already finished — then be handed the answer only on its
+ * NEXT poll, a minute later. So after a timeout we re-read
+ * {@link CcSession.lastResult} and hand it back if a result arrived DURING this
+ * wait. The identity comparison against the pre-wait value is what makes that
+ * safe: `lastResult` survives turns, and returning a PREVIOUS turn's answer for
+ * the turn we were actually waiting on would be a lie, not a rescue.
  * @param session - the live actor.
  * @param timeoutMs - the cap in milliseconds.
- * @param sessionId - the session id, for the error payload.
- * @returns the result envelope.
- * @throws {ClaudeCodeToolError} code `CC_TIMEOUT` when the wait elapsed.
+ * @returns the result envelope, or undefined when the wait elapsed with the turn
+ *   still in flight (the session is untouched and still open).
+ * @throws whatever the seam raised that was NOT a timeout — `SESSION_CLOSED`
+ *   above all, which really is a failure and really does mean the session is gone.
  */
 async function waitCapped(
   session: CcSession,
   timeoutMs: number,
-  sessionId: string,
-): Promise<CcMessageEnvelope> {
+): Promise<CcMessageEnvelope | undefined> {
+  const before = session.lastResult
   try {
     return await session.waitForResult(timeoutMs)
   } catch (error) {
     if (errorCode(error) !== 'TIMEOUT') throw error
-    throw new ClaudeCodeToolError(
-      `claude-code: session ${sessionId} produced no result within ${timeoutMs}ms. The session is `
-      + 'STILL OPEN and still working: wait again with claude_code_wait, stop the current turn with '
-      + 'claude_code_cancel, or end it with claude_code_close.',
-      'CC_TIMEOUT',
-      { data: { session_id: sessionId }, cause: error })
+    const late = session.lastResult
+    return late !== undefined && late !== before ? late : undefined
   }
 }
 
 /**
  * Clamp a model-supplied wait to something this layer will actually honor.
+ *
+ * An absent (or nonsensical) `timeout_ms` gets {@link DEFAULT_WAIT_TIMEOUT_MS},
+ * not the ceiling: defaulting to the cap is what made every unattended poll a
+ * ten-minute block. An explicit oversized value is still clamped to
+ * {@link MAX_WAIT_TIMEOUT_MS} — a caller may ask for a long block, but not for
+ * an unbounded one.
  * @param timeoutMs - the requested wait, if any.
  * @returns the effective wait in milliseconds.
  */
 function effectiveWait(timeoutMs: number | undefined): number {
   if (timeoutMs === undefined || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-    return MAX_WAIT_TIMEOUT_MS
+    return DEFAULT_WAIT_TIMEOUT_MS
   }
   return Math.min(Math.round(timeoutMs), MAX_WAIT_TIMEOUT_MS)
+}
+
+/** The fields every "still running" answer carries, shared by open and wait. */
+interface CcStillRunning {
+  /** The lifecycle state, read from the same snapshot as the asks below. */
+  readonly status: CcSessionSnapshot['status']
+  /** The still-open session, repeated in the value so the model can wait again without re-deriving it. */
+  readonly session_id: string
+  /** How many asks are awaiting a human. */
+  readonly pending_asks: number
+  /** What those asks are. */
+  readonly pending_ask_details: CcPendingAskProjection[]
+}
+
+/**
+ * Read the still-open session's state and pending asks at expiry.
+ *
+ * **One `snapshot()`, not four getters.** `pending_asks` and
+ * `pending_ask_details` must never disagree: a count of 1 with an empty detail
+ * list is precisely the unusable signal this whole change exists to delete, and
+ * a caller reading the two properties separately is one refactor (or one
+ * awaited call slipped between them) away from producing exactly that.
+ * `CcSession.snapshot()` reads the status, the count and the details from the
+ * one ask table in a single synchronous projection, so the value is internally
+ * consistent by construction rather than by convention. The status comes from
+ * the same read for the same reason — "running, 0 pending" and "idle, 1 pending"
+ * are both states a split read could invent.
+ *
+ * The clock is read ONCE, here, and the elapsed time is baked into the value —
+ * so the presenters stay pure functions of `(args, value)` and a logged result
+ * re-renders to exactly the prose the model originally saw.
+ * @param session - the live actor.
+ * @param sessionId - its id, as the caller wrote it.
+ * @returns the shared "still running" fields.
+ */
+function stillRunning(session: CcSession, sessionId: string): CcStillRunning {
+  const snapshot = session.snapshot()
+  return {
+    status: snapshot.status,
+    session_id: sessionId,
+    pending_asks: snapshot.pendingAsks,
+    pending_ask_details: projectPendingAsks(snapshot.pendingAskDetails, Date.now()),
+  }
 }
 
 export function apply(ctx: Context, _config: Config = {}): void {
@@ -178,6 +277,12 @@ export function apply(ctx: Context, _config: Config = {}): void {
                 },
               },
               cost_usd: { type: 'number', description: 'Opening-turn cost in USD, when the SDK reported one.' },
+              pending_asks: {
+                type: 'integer',
+                description: 'Present ONLY when the opening turn was still running when this call returned: how '
+                  + 'many asks are awaiting a human. The session is open; call claude_code_wait to keep waiting.',
+              },
+              pending_ask_details: PENDING_ASK_DETAILS_SCHEMA,
             },
           },
           {
@@ -195,8 +300,13 @@ export function apply(ctx: Context, _config: Config = {}): void {
         type: 'text',
         text: value.kind === 'background'
           ? `started background job ${value.jobId} (session ${value.ccSessionId})`
-          : `session ${value.session_id} (${value.status})`
-            + (value.result === undefined ? '' : `\n\n${value.result}`),
+          // `pending_asks` is the discriminator for the still-running branch: it
+          // is set exactly when the sync wait expired with the turn in flight,
+          // and absent on every completed (or idle) open.
+          : value.pending_asks !== undefined
+            ? renderStillRunning(value.session_id, value.status, value.pending_ask_details ?? [])
+            : `session ${value.session_id} (${value.status})`
+              + (value.result === undefined ? '' : `\n\n${value.result}`),
       } satisfies ContentBlock],
     },
     async execute(args, exec) {
@@ -218,7 +328,14 @@ export function apply(ctx: Context, _config: Config = {}): void {
       if (!opened.prompted) {
         return { kind: 'session' as const, session_id: opened.id, status: opened.session.status }
       }
-      const envelope = await waitCapped(opened.session, SYNC_OPEN_TIMEOUT_MS, opened.id)
+      const envelope = await waitCapped(opened.session, SYNC_OPEN_TIMEOUT_MS)
+      // Expiry is NOT a failure and does not close anything: the session is
+      // open, the turn is still going, and — usually — a human simply has not
+      // answered a permission prompt yet. Hand back the id and what is pending
+      // so the caller can wait again instead of respawning.
+      if (envelope === undefined) {
+        return { kind: 'session' as const, ...stillRunning(opened.session, opened.id) }
+      }
       return {
         kind: 'session' as const,
         session_id: opened.id,
@@ -268,12 +385,16 @@ export function apply(ctx: Context, _config: Config = {}): void {
     name: 'claude_code_wait',
     description: 'Wait for an open Claude Code session to finish its current turn (or `timeout_ms` to elapse) and '
       + 'return its outcome: status, final text when the turn completed, and usage/cost when the SDK reported them. '
-      + 'A timeout leaves the session running — wait again, or cancel it.',
+      + 'This NEVER fails just because the turn is unfinished: if the wait elapses it returns `status: "running"` '
+      + 'with `pending_ask_details` naming any permission/question a human still has to answer in the dsh UI. That '
+      + 'is a normal state — call this tool again to keep waiting; do not cancel the turn or open a new session.',
     parameters: {
       session_id: { type: 'string', required: true, description: 'The Claude Code session id to wait on.' },
       timeout_ms: {
         type: 'number',
-        description: 'Maximum time to wait, in milliseconds. Omitted (or above the cap) means the 10-minute ceiling.',
+        description: 'Maximum time to wait, in milliseconds. Omitted means 60000 (one minute); values above the '
+          + '600000 (10-minute) ceiling are clamped to it. Elapsing is not an error — you get the running status '
+          + 'and what is pending.',
       },
     },
     output: {
@@ -292,16 +413,41 @@ export function apply(ctx: Context, _config: Config = {}): void {
             },
           },
           cost_usd: { type: 'number', description: 'Turn cost in USD, when the SDK reported one.' },
+          session_id: {
+            type: 'string',
+            description: 'The still-open session, present ONLY when the wait elapsed with the turn still running '
+              + '— pass it back to claude_code_wait to keep waiting.',
+          },
+          pending_asks: {
+            type: 'integer',
+            description: 'Present ONLY when the wait elapsed with the turn still running: how many asks are '
+              + 'awaiting a human answer in the dsh UI.',
+          },
+          pending_ask_details: PENDING_ASK_DETAILS_SCHEMA,
         },
       },
       render: (_args, value) => [{
         type: 'text',
-        text: value.result ?? `status: ${value.status}`,
+        // Three cases, in the order they matter. A finished turn renders its
+        // answer exactly as it always has. An elapsed wait renders the
+        // human-in-the-loop guidance — the string this whole change exists for.
+        // A turn that finished with no text (an interrupted turn) renders its
+        // status, as before.
+        text: value.result
+          ?? (value.pending_asks === undefined
+            ? `status: ${value.status}`
+            : renderStillRunning(value.session_id ?? '', value.status, value.pending_ask_details ?? [])),
       } satisfies ContentBlock],
     },
     async execute(args) {
       const session = requireSession(ctx, args.session_id)
-      const envelope = await waitCapped(session, effectiveWait(args.timeout_ms), args.session_id)
+      const envelope = await waitCapped(session, effectiveWait(args.timeout_ms))
+      // The regression the production trace demands: RESOLVE, do not reject.
+      // A thrown timeout reads as "this session is broken" and the delegating
+      // model cancels and re-opens; a resolved `running` reads as "not yet" and
+      // it waits again — which is the only thing that can actually work while a
+      // human has not clicked approve.
+      if (envelope === undefined) return stillRunning(session, args.session_id)
       return { status: session.status, ...projectResult(envelope) }
     },
     presentCall: args => genericCall(`Wait for Claude Code session ${args.session_id}`),
@@ -309,8 +455,9 @@ export function apply(ctx: Context, _config: Config = {}): void {
 
   ctx.tools.register(defineTool({
     name: 'claude_code_status',
-    description: 'Read the current status of an open Claude Code session without waiting: lifecycle state, how '
-      + 'many permission/question asks are pending, and context-window occupancy when known.',
+    description: 'Read the current status of an open Claude Code session without waiting: lifecycle state, which '
+      + 'permission/question asks are pending (tool name and the reason a human is being shown, in '
+      + '`pending_ask_details`), and context-window occupancy when known.',
     parameters: {
       session_id: { type: 'string', required: true, description: 'The Claude Code session id to inspect.' },
     },
@@ -328,6 +475,7 @@ export function apply(ctx: Context, _config: Config = {}): void {
               + 'between turns) or "crashed" (it died mid-turn, so that turn produced no result).',
           },
           pending_asks: { type: 'integer', required: true, description: 'Number of permission/question asks currently awaiting an answer.' },
+          pending_ask_details: { ...PENDING_ASK_DETAILS_SCHEMA, required: true },
           context_usage: {
             type: 'object',
             additionalProperties: false,
@@ -343,7 +491,13 @@ export function apply(ctx: Context, _config: Config = {}): void {
         text: `session ${args.session_id}: ${value.status}`
           + (value.close_reason === undefined ? '' : ` (${value.close_reason})`)
           + `, ${value.pending_asks} pending ask(s)`
-          + (value.context_usage !== undefined ? `, ${value.context_usage.used_tokens} tokens used` : ''),
+          + (value.context_usage !== undefined ? `, ${value.context_usage.used_tokens} tokens used` : '')
+          // The count alone was the whole problem: it said something was
+          // pending and never what. When anything IS pending, name it and say
+          // who has to act.
+          + (value.pending_ask_details.length === 0
+            ? ''
+            : `\n${renderPendingAsks(value.pending_ask_details)}\n${answerInDshUi(args.session_id)}`),
       } satisfies ContentBlock],
     },
     async execute(args) {
@@ -375,6 +529,9 @@ export function apply(ctx: Context, _config: Config = {}): void {
         status: snapshot.status,
         ...(snapshot.closeReason === undefined ? {} : { close_reason: snapshot.closeReason }),
         pending_asks: snapshot.pendingAsks,
+        // Always present, empty when nothing pends: an absent array would make
+        // "nothing is pending" and "this build cannot tell you" the same value.
+        pending_ask_details: projectPendingAsks(snapshot.pendingAskDetails, Date.now()),
         ...(contextUsage === undefined ? {} : { context_usage: contextUsage }),
       })
     },

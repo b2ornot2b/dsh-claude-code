@@ -24,7 +24,8 @@ describe('package entry shape', () => {
   it('exports exactly the plugin namespace plus the tool-layer constants', async () => {
     const mod = await import('@deepseek-ai/dsh-tool-claude-code')
     expect(Object.keys(mod).sort()).toEqual([
-      'Config', 'MAX_WAIT_TIMEOUT_MS', 'SYNC_OPEN_TIMEOUT_MS', 'apply', 'inject', 'name',
+      'Config', 'DEFAULT_WAIT_TIMEOUT_MS', 'MAX_WAIT_TIMEOUT_MS', 'SYNC_OPEN_TIMEOUT_MS',
+      'apply', 'inject', 'name',
     ])
   })
 })
@@ -237,7 +238,7 @@ describe('claude_code_send / wait / status / cancel / close', () => {
     }
   })
 
-  it('reports a wait that elapsed as CC_TIMEOUT naming the still-open session', async () => {
+  it('RESOLVES a wait that elapsed as status running, naming the still-open session', async () => {
     const harness = await mountTools()
     try {
       const opened = await harness.call('claude_code_open', { cwd: CWD })
@@ -247,9 +248,16 @@ describe('claude_code_send / wait / status / cancel / close', () => {
       })
 
       const result = await harness.call('claude_code_wait', { session_id: sessionId, timeout_ms: 5 })
-      expect(result.isError).toBe(true)
-      expect(result.error?.info?.code).toBe('CC_TIMEOUT')
-      expect(String(result.error?.message)).toContain(sessionId)
+      // The regression the production trace demands: an unfinished turn is a
+      // VALUE, not an error. A thrown timeout is what taught a delegating model
+      // to cancel and re-open a fresh session three times over.
+      expect(result.isError, JSON.stringify(result.error)).toBe(false)
+      expect(result.value).toEqual({
+        status: 'running',
+        session_id: sessionId,
+        pending_asks: 0,
+        pending_ask_details: [],
+      })
       // The session is untouched: still open, still running.
       expect(harness.ctx.claudeCode.get(sessionId as never)?.status).toBe('running')
     } finally {
@@ -280,6 +288,7 @@ describe('claude_code_send / wait / status / cancel / close', () => {
       expect(status.value).toEqual({
         status: 'idle',
         pending_asks: 0,
+        pending_ask_details: [],
         context_usage: { used_tokens: 160, max_tokens: 200_000 },
       })
     } finally {
@@ -293,7 +302,7 @@ describe('claude_code_send / wait / status / cancel / close', () => {
       const opened = await harness.call('claude_code_open', { cwd: CWD })
       const sessionId = (opened.value as { session_id: string }).session_id
       const status = await harness.call('claude_code_status', { session_id: sessionId })
-      expect(status.value).toEqual({ status: 'idle', pending_asks: 0 })
+      expect(status.value).toEqual({ status: 'idle', pending_asks: 0, pending_ask_details: [] })
     } finally {
       await harness.dispose()
     }

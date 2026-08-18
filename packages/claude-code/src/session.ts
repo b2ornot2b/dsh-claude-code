@@ -31,6 +31,7 @@ import type {
   CcAccountData, CcBackendQuery, CcCanUseTool, CcInitializeResult, CcInterruptReceipt,
   CcPermissionDecision, CcPermissionRequest, CcQueryOptions, CcSdkMessage, CcUuid, QueryBackend,
 } from './backend.ts'
+import type { CcPendingAsk } from './ask/table.ts'
 import type { CcAskCallSite, CcAskTarget } from './ask/types.ts'
 import type { ResolvedClaudeCodeConfig } from './config.ts'
 import { createInputStream } from './input-stream.ts'
@@ -211,6 +212,8 @@ export interface CcAskChannel {
   readonly canUseTool: CcCanUseTool
   /** How many asks are awaiting an answer right now. */
   readonly pendingAsks: number
+  /** WHAT is awaiting an answer right now — kind, tool, reason, and since when. */
+  readonly pendingAskDetails: readonly CcPendingAsk[]
   /**
    * Set who answers for this session.
    * @param target - the dsh agent and its optional seam overrides.
@@ -419,6 +422,16 @@ export class CcSession {
   }
 
   /**
+   * WHAT those asks are: kind, tool, the reason the human is reading, and when
+   * each started pending. Empty without an ask channel — and empty is the
+   * honest answer there, because a session with no channel denies fail-closed
+   * and never leaves anything pending.
+   */
+  get pendingAskDetails(): readonly CcPendingAsk[] {
+    return this.#deps.asks?.pendingAskDetails ?? []
+  }
+
+  /**
    * The last unanswerable-ask failure, when `ask.fallback` is `'error'`.
    *
    * `'error'` denies with `interrupt: true` AND surfaces the failure here (and
@@ -467,6 +480,7 @@ export class CcSession {
       status: this.#status,
       ...(this.#model === undefined ? {} : { model: this.#model }),
       pendingAsks: this.pendingAsks,
+      pendingAskDetails: this.pendingAskDetails,
       ...(this.#contextUsage === undefined ? {} : { contextUsage: this.#contextUsage }),
       ...(this.#closeReason === undefined ? {} : { closeReason: this.#closeReason }),
     }

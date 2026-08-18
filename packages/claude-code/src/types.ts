@@ -14,6 +14,7 @@ import { HarnessError } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type { Session as DshSession } from '@deepseek-ai/dsh-session'
 
+import type { CcPendingAsk } from './ask/table.ts'
 import type { CcAskTarget } from './ask/types.ts'
 import type { CcMirrorHandle, CcMirrorOptions } from './mirror.ts'
 
@@ -252,6 +253,18 @@ export interface CcSessionSnapshot {
   readonly model?: string
   /** Number of permission/question asks currently awaiting an answer. */
   readonly pendingAsks: number
+  /**
+   * WHAT those asks are — one entry per pending ask, in arrival order, empty
+   * when nothing is pending.
+   *
+   * Carried ALONGSIDE the count rather than replacing it: `pendingAsks` is
+   * already in the `claude_code_status` tool schema, and a count is what most
+   * callers branch on. This is what makes the pending state actionable — "a
+   * human must approve `Write: /tmp/notes.txt`" instead of "1 pending ask(s)",
+   * which is all the seam could say when a real session spent thirty minutes
+   * blocked on an unanswered approval nobody upstream could name.
+   */
+  readonly pendingAskDetails: readonly CcPendingAsk[]
   /** Context-window occupancy, when the session has reported usage. */
   readonly contextUsage?: CcContextUsage
   /**

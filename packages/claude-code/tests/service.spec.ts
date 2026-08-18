@@ -175,7 +175,9 @@ describe('ClaudeCodeService teardown (HMR safety)', () => {
         return Promise.resolve()
       },
     })
-    expect(service.list()).toEqual([{ id, status: 'idle', pendingAsks: 0 }])
+    // `pendingAskDetails` is empty rather than absent: a record with no live
+    // actor has no ask table, and "nothing pending" is the honest projection.
+    expect(service.list()).toEqual([{ id, status: 'idle', pendingAsks: 0, pendingAskDetails: [] }])
 
     await fiber.dispose()
     expect(closed).toBe(1)
