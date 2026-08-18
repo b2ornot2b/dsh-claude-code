@@ -686,6 +686,38 @@ export class CcSession {
   }
 
   /**
+   * Switch the model this session's next turns use.
+   *
+   * This is the ONLY model-switching path a CC-backed session has, and it is
+   * the §7.1 substitute for a mechanism dsh has but cannot use here: dsh's own
+   * model selection rides `installModelSelection()` + the `agent/request`
+   * waterfall, which is dispatched only from `ReactLoopAgent` around
+   * `ctx.llm.stream()` and therefore NEVER fires for a session Claude Code
+   * drives (review finding D8). `AgentOptions` has no `setModel()` either
+   * (D7) — so the adapter reaches through to here.
+   *
+   * The switch takes effect on the CLI's side; the snapshot is updated
+   * optimistically to what was asked for, and the next `system/init` (the CLI
+   * emits one after every interrupted turn) overwrites it with what the CLI
+   * actually adopted.
+   *
+   * @param model - the model id, or omitted for the CLI's own default (which
+   *   leaves `snapshot().model` ABSENT until the CLI reports one).
+   * @returns nothing.
+   * @throws {ClaudeCodeError} code `SESSION_CLOSED` when the session is closed
+   *   or was never opened.
+   */
+  async setModel(model?: string): Promise<void> {
+    this.assertOpen()
+    const query = this.#query
+    if (query === undefined) {
+      throw new ClaudeCodeError(`claude-code: session ${this.id} is not open`, 'SESSION_CLOSED')
+    }
+    await query.setModel(model)
+    this.#model = model
+  }
+
+  /**
    * Interrupt the running turn and reconcile the receipt.
    *
    * `keepQueued: true` (the default) is the honest mapping of dsh's

@@ -7,7 +7,7 @@ conventions their packages must follow.
 - Seam package: `packages/claude-code` → `@deepseek-ai/dsh-claude-code`
 - Consumers built against it:
   - `packages/tool-claude-code` → `@deepseek-ai/dsh-tool-claude-code` (`inject: ['tools', 'claudeCode']`)
-  - `packages/claude-code-agent` → `@deepseek-ai/dsh-claude-code-agent` (`inject: ['agents', 'claudeCode']`)
+  - `packages/claude-code-agent` → `@deepseek-ai/dsh-claude-code-agent` (`inject: ['agents', 'claudeCode', 'sessions']`)
 
 Everything here is verified: every package builds with `skipLibCheck: false`,
 and `pnpm -r typecheck`, `tsc -p tsconfig.tests.json`, and `vitest run` are
@@ -31,6 +31,14 @@ rejected by the SDK at spawn; the warm fingerprint was invalidated by the SDK's
 own `process.env` write) and the two the review of those fixes surfaced (a warm
 subprocess could be seeded with `resume`/`forkSession` baked in; a plain resume
 of a live session overwrote its registry entry).
+
+**Updated by Phase 6 (the Agent adapter).** §4.4f is the adapter's whole surface
+— `ClaudeCodeAgent`, `createClaudeCodeAgent`, `ctx.claudeCodeAgents`, the
+`Agent`-member mapping, the spawn sequence and the teardown ORDER — plus the one
+seam addition it needed (`CcSession.setModel`, §4.4b). §5a's Phase 6 block
+records six deliberate deviations from what Phase 1 froze, and the defect the
+unmount test found (a spawned agent outliving its own plugin, because cordis's
+`Service.ctx` is not the mounting fiber's context).
 
 **Updated by Phase 3 (the mirror).** §4.4c is the mirror's whole surface —
 `CcMirror`, `attachMirror`, `CcMirrorSource`, the `claude-code/compact` custom
@@ -404,6 +412,7 @@ class CcSession {
   open(): Promise<void>                        // the service calls this; consumers do not
   send(input: string | { content: string, uuid?: CcUuid }, options?: CcSendOptions): CcUuid
   waitForResult(timeoutMs?: number): Promise<CcMessageEnvelope>
+  setModel(model?: string): Promise<void>        // Phase 6 — see below
   interrupt(options?: CcInterruptOptions): Promise<CcInterruptOutcome>
   onMessage(listener: CcMessageListener): () => void
   onSend(listener: CcSendListener): () => void   // Phase 3 — outgoing messages
@@ -430,6 +439,17 @@ exactly like `onMessage`'s.
 | `followup` | plain uuid-stamped message | queues; runs as its own next turn |
 | `steer` | `priority: 'now'` | **aborts** the running turn and refolds both instructions into ONE fresh turn. The aborted turn emits an `error_during_execution` result that is an internal artifact — the envelope flags it, and the mirror must suppress it. Turn-1 tokens are re-paid |
 | `inject` | `shouldQuery: false` | appended to the transcript, starts no turn; committed immediately |
+
+**`setModel(model?)`** (Phase 6) is a thin `query.setModel()` passthrough, and the ONLY
+model-switching path a CC-backed session has: dsh's own model selection rides
+`installModelSelection()` + the `agent/request` waterfall, which is dispatched
+only from `ReactLoopAgent` and therefore never fires for a session Claude Code
+drives (D8), and `AgentOptions` has no `setModel()` either (D7). The snapshot is
+updated optimistically to what was asked for; the next `system/init` (the CLI
+emits one after every interrupted turn) overwrites it with what the CLI actually
+adopted. Omitting the argument asks for the CLI default and leaves
+`snapshot().model` ABSENT until the CLI reports one. Refuses a closed session
+with `SESSION_CLOSED`.
 
 **The fan-out envelope** — subscribe with `onMessage`; the payload is
 `{ message, meta }`, never a bare message:
@@ -979,6 +999,144 @@ approximation (a snapshot of the last completed turn, not a live meter). It is
 ABSENT until a turn has reported usage; `CcSessionSnapshot.contextUsage` wins
 whenever a future phase starts populating it.
 
+### 4.4f The Agent adapter (Phase 6, `@deepseek-ai/dsh-claude-code-agent`)
+
+`inject: ['agents', 'claudeCode', 'sessions']` — `sessions` is new and NOT
+optional: an `Agent` needs a real, STORE-ATTACHED dsh `Session`, or the mirror's
+appends are published to nobody.
+
+**Fourteen** runtime exports (pinned by
+`packages/claude-code-agent/tests/exports.spec.ts`):
+
+```ts
+class ClaudeCodeAgent implements Agent {            // @deepseek-ai/dsh-agent's Agent, verbatim
+  constructor(deps: ClaudeCodeAgentDeps)            // { ctx, session, cc, provider?, logger?, disposeDrainMs? }
+  readonly scope: Scope                             // dsh-scope; yield rawDispose into a composite teardown
+  setModel(model?: string): Promise<void>           // package-level, NOT on Agent (D7)
+  drain(): Promise<void>                            // disposed-cause cancel + bounded quiescence wait
+}
+function createClaudeCodeAgent(ctx, options: CcAgentOptions, deps?: CcAgentSpawnDeps): Promise<CcAgentHandle>
+function extractMessageText(message: UserMessage): CcAgentMessageText   // { text, dropped }
+const DEFAULT_DISPOSE_DRAIN_MS: 5000
+const CC_AGENT_PROVIDER: 'claude-code'
+const INERT_DSH_MECHANISMS: readonly ['agent/pre-step','agent/request','agent/request-error','tools/pre-execute']
+
+class ClaudeCodeAgentService extends Service {      // ctx.claudeCodeAgents
+  static readonly Config: z<CcAgentConfig>
+  readonly config: ResolvedCcAgentConfig
+  spawn(options?: Partial<CcAgentOptions>, deps?: CcAgentSpawnDeps): Promise<CcAgentHandle>
+  get(id: CcSessionId): ClaudeCodeAgent | undefined
+  list(): readonly ClaudeCodeAgent[]
+}
+function resolveCcAgentConfig(config?: CcAgentConfig): ResolvedCcAgentConfig
+const name: 'claude-code-agent'; const inject: string[]; const Config: z<CcAgentConfig>
+function apply(ctx: Context, config?: CcAgentConfig): void
+const MOUNT_MARKER: string; const UNMOUNT_MARKER: string
+```
+
+```ts
+interface CcAgentOptions extends Omit<CcOpenOptions, 'mirror' | 'ask'> { provider?: string }
+interface CcAgentHandle { readonly agent: ClaudeCodeAgent; dispose(): Promise<void> }
+interface CcAgentConfig { provider?: string; defaults?: { cwd?, model?, permissionMode? } }
+```
+
+`mirror` and `ask` are deliberately absent from `CcAgentOptions`: the adapter
+owns both. The mirror target is the agent's own dsh session (it cannot exist
+before `open()` mints the id), and the ask target is the agent itself.
+
+**Signature change from Phase 1.** The scaffold's
+`createClaudeCodeAgent(ctx, options): Promise<Agent>` returns
+`Promise<CcAgentHandle>` now. The disposer is a capability that has to come back
+with the agent — `ctx.agents.get(id)` deliberately returns a bare `Agent`, so a
+caller that only got the agent could never tear exactly it down. Same shape as
+`dsh-agent`'s own `AgentHandle`.
+
+**The Agent mapping**, in one table (`Agent` member → what it actually is):
+
+| member | implementation |
+|---|---|
+| `id` | the shared bare-UUID `SessionId`; the constructor THROWS if it differs from `session.id` (D6) |
+| `session` | the dsh `Session` the seam's mirror writes into |
+| `status` | seam status projected onto dsh's two: `running` while a turn is in flight, `idle` for `starting`/`idle`/`closed`. Disposal is not a third status |
+| `options` | `{ provider, model }`, a LIVE projection of `CcSession.snapshot()` — not the frozen startup snapshot Phase 1 promised. Object identity changes only when the model does |
+| `send(m, target, wakeup)` | `next-turn`+wake → `followup`; `next-step`+wake → `steer`; `wakeup:false` → `inject` (either target) |
+| `cancel(cause, opts)` | `interrupt({ keepQueued: opts?.keepInbox ?? true })` — **the default differs from `ReactLoopAgent`'s**, see below |
+| `whenIdle()` | no running turn AND no maintenance task AND nothing `queued` in the outbox; a CLOSED session is quiescent by definition |
+| `runMaintenance(task)` | claims the true-idle phase; a second claim, or a claim while a turn runs, throws SYNCHRONOUSLY. Public status stays `idle`; waking input parks in the inbox until the task settles |
+| `inbox` | dsh's own `Inbox` over the agent's session, reconciled from the outbox (below) |
+| `ctx` | `createScope(ctx, agent).ctx.extend({ agent })` — agent-local, scope-filtered, unwound on disposal |
+
+**The inbox is a projection of the outbox.** `queued` → still pending;
+`committed` → **claimed** (`Inbox.claim()`, whose durable event is a pure
+deletion — a splice would record the message as *canceled*, the opposite of what
+happened); `cancelled` → **discarded** (a canceled splice, which is what it was).
+An `inject` commits at send time, so it is claimed immediately. A message the
+seam refused (a closed session) is removed rather than left pending, which would
+hang `whenIdle()`.
+
+**`keepInbox` defaults to `true` here, deliberately.** dsh's loop owns its inbox
+and clears it by default; this adapter does not own the queue, and
+`keepQueued: false` is EMULATED and lossy (§4.4b). Opt in explicitly, exactly as
+`claude_code_cancel` does. The inbox is never cleared optimistically: a message
+the drain could not stop is still going to run.
+
+**Non-text content.** `send()` reduces a `UserMessage` to its `text` blocks (the
+seam's channel is `{ content: string }`). Anything else is recorded IN THE
+TRANSCRIPT as a `notice`-form `user/message` (bounded `summary`, per
+`ContextFormed`) and logged. A message with no text at all is not delivered and
+never enters the inbox.
+
+**Spawn sequence** (`src/spawn.ts`), and why it is this sequence:
+
+1. `ctx.claudeCode.open()` **without** `prompt` — the seam mints the id, and the
+   dsh session that must carry it cannot exist first. Same reason
+   `claude_code_open` does it (§4.4e).
+2. `ctx.sessions.prepare(id, { meta: { cwd } })` — `prepare`+`enter`+`announce`,
+   not `create()`, so the store attachment joins the ONE composite effect.
+3. Construct the agent (this mints its scope).
+4. One composite `ctx.effect`, yielding: session `enter` → `attachMirror` +
+   `attachAskTarget({ agent, delegated: false })` → `ctx.agents.register(agent)`
+   → `agent.scope.rawDispose` → the seam-close disposer.
+5. `agent/session-start` (`startup`, or `resume` when opened with `resume`).
+6. The opening prompt, through `agent.followup()`.
+
+`delegated: false` is a fact rather than a policy: `register()` records no owner,
+so the agent is a registry ROOT and `ctx.userQuestions.ask()` will answer it.
+
+**Teardown ordering** (cordis disposes composite effects in REVERSE yield order):
+
+| # | step | why here |
+|---|---|---|
+| 1 | `cancel({ kind: 'disposed' })` + a **bounded** quiescence wait (`DEFAULT_DISPOSE_DRAIN_MS`, 5s) | disposal IS a disposed-cause cancel followed by quiescence (`dsh-agent-loop`'s shape). Bounded: a subprocess that already died never emits the result that would settle it, and plugin unload must not hang on one |
+| 2 | `ctx.claudeCode.close(id)` | settles pending asks, FINALIZES the mirror (a dangling `turn/start` makes the log permanently unappendable), closes the subprocess |
+| 3 | agent scope unwind | agent-local contributions go after the driver is quiet |
+| 4 | registry detach → `agent/disposed` | exactly `agent/disposed`'s documented position: "after driver quiescence and scoped-registration unwind, but before session detachment" |
+| 5 | session store detach | LAST: the store attachment installs the publication hooks, so detaching earlier would publish none of step 2's closing events |
+
+`packages/claude-code-agent/tests/spawn.spec.ts` asserts step 4's position
+directly: inside an `agent/disposed` listener the session is still in the store,
+the Claude Code session is already gone, and the mirror's
+`turn/end {aborted, disposed}` is already in the log.
+
+**Disposer identity.** `ctx.agents.register()`'s exact return value is yielded
+into the composite effect, never a wrapper (the D6 rule, and `register()`'s own
+documentation). `tests/orderings.spec.ts` asserts the IDENTITY, not just the
+resulting order: `register()` returns a cordis effect wrapper carrying
+`symbols.effect`, and cordis re-parents a yielded one into the composite effect
+as a labeled CHILD — so the composite's children must contain
+`agents.register()`. A wrapper preserves the order (the ordering test still
+passes) while dropping the symbol, which is why the identity needs its own
+assertion.
+
+**`cancel()`'s cause does not reach Claude Code.** `CcSession.interrupt()` takes
+no cause parameter — the SDK's `interrupt()` takes no arguments at all — so
+`AgentCancelCause` is only an active maintenance task's abort reason. Every
+agent-driven interrupt the subprocess actually answers is mirrored as
+`turn/end { aborted, reason: { kind: 'user' } }` whatever the real cause was;
+`{ kind: 'disposed' }` appears only on `CcMirror.finalize()`'s fallback, when the
+turn was still dangling at close time. The live dispose/HMR specs accept either,
+because that is the actual cross-environment guarantee.
+
 ### 4.5 Configuration
 
 ```ts
@@ -1092,7 +1250,9 @@ reads session policy from `ctx.claudeCode.config`.
   `exactOptionalPropertyTypes` fails the build.
 - **`agent/pre-step`, `agent/request`, `agent/request-error` and `tools/*` are
   inert for a CC-backed agent.** The agent adapter's README documents the
-  substitutes.
+  substitutes, and `packages/claude-code-agent/tests/inert.spec.ts` asserts the
+  adapter registers no listener for any of them — measured as a delta across
+  mounting and spawning, so the documentation cannot quietly become a lie.
 - **`register()`'s returned disposer identity is load-bearing** — yield the
   exact function into the composite effect, never a wrapper.
 
@@ -1299,6 +1459,104 @@ unhandled rejection. Aborting the caller's tool call AFTER the job id is
 published leaves the session running and the job unsettled — the D10 rule,
 asserted directly.
 
+### Phase 6 additions and deviations
+
+32. **`CcSession.setModel(model?)` is new** (§4.4b) — a thin `query.setModel()`
+    passthrough, added because the adapter needs SOMETHING to switch a model
+    with and both dsh paths are closed to it (D7: no `setModel()` on
+    `AgentOptions`; D8: the `agent/request` waterfall never fires). No other
+    seam behavior changed, and the seam's export list is unchanged (it is a
+    method, not an export).
+33. **`createClaudeCodeAgent()` returns a handle, not a bare `Agent`.** Phase 1
+    typed it `Promise<Agent>` and called those types final; they were not. The
+    disposer is a capability that has to come back with the agent
+    (`ctx.agents.get(id)` deliberately returns a bare `Agent`), so the signature
+    is now `Promise<CcAgentHandle>` — the same shape as `dsh-agent`'s own
+    `AgentHandle`. It also takes an optional third `deps` argument for test
+    seams.
+34. **The adapter plugin injects `sessions`.** Phase 1's list was
+    `['agents', 'claudeCode']`. An `Agent` needs a real, store-attached dsh
+    `Session`; without one the mirror's appends are published to nobody, so a
+    missing store is a clean mount failure rather than a surprising later one.
+35. **`Agent.options` is a live projection, not a startup snapshot.** Phase 1's
+    README listed "the model snapshot goes stale" as a limitation. It does not:
+    `options` reads `CcSession.snapshot().model` on access (rebuilding the frozen
+    object only when the model actually changes), so it reflects both
+    `setModel()` and whatever the CLI reports on its next `system/init`.
+36. **`cancel()`'s `keepInbox` defaults to `true`, where `ReactLoopAgent`'s
+    defaults to clearing.** Deliberate: the queue lives in the subprocess and
+    `keepQueued: false` is emulated, capped and lossy (§4.4b), so suppression is
+    opt-in — the same call the Phase 5 tool layer made for `claude_code_cancel`
+    (correction 23). The inbox is reconciled from the outbox afterwards rather
+    than cleared optimistically, so it never claims a message was cancelled that
+    the drain could not actually stop.
+37. **The adapter package gained two dependencies** (peer + dev, exact
+    `0.1.0-rc.7`): `@deepseek-ai/dsh-scope` (`createScope`, for a real
+    agent-scoped context whose contributions unwind on disposal — the `Agent.ctx`
+    contract) and `@deepseek-ai/dsh-llm` (`createUserMessage` /
+    `boundContextSummary`, the same two the seam's mirror uses). No pin moved.
+38. **A resumed Claude Code session still gets a FRESH dsh log.** The adapter
+    always `prepare()`s a new dsh session, so `resume`/`fork` carries history on
+    the CC side while the mirror starts empty. A plain resume of a session whose
+    id already has a live dsh session fails at `prepare()`, and the spawn path
+    closes the just-opened subprocess before rethrowing.
+
+### The defect the unmount test found
+
+39. **An agent spawned through `ctx.claudeCodeAgents` survived the plugin
+    unload that was supposed to tear it down.** `ClaudeCodeAgentService.spawn()`
+    registered the agent's lifetime effect through `this.ctx` — but cordis's
+    `Service` stores a TRACED derivative whose `.fiber` is not the mounting
+    plugin's, so `fiber.dispose()` never reached the effect: the registry entry,
+    the dsh session and the Claude Code subprocess all outlived their plugin.
+    **Fix:** the service captures the constructor's `ctx` and spawns through
+    that (the same thing the seam's own service does for its teardown effect).
+    `tests/inert.spec.ts`'s unmount case fails without it.
+
+### Defects the Phase 6 verify pass (Stage 3) found
+
+40. **`reconcileInbox()` scanned the whole session log once per streamed
+    message.** It ran on EVERY seam message — one per assistant chunk, thousands
+    per session — and unconditionally resolved the current turn number through
+    `Session.events`, which rebuilds and freezes a copy of the entire log on
+    every read after an append. Since the mirror appends per chunk, that is a
+    full log copy per chunk: **quadratic in session length**, for a number that
+    is only needed when a claim is actually issued. **Fix:** an empty inbox
+    returns immediately, and the turn number is resolved lazily (`turn ??=`) at
+    the two call sites that consume it. `tests/orderings.spec.ts`'s
+    "reads the event log only when a claim is actually owed" pins it by spying
+    on the `events` accessor; it fails against the eager version.
+41. **The exact-disposer rule was documented and relied upon but not tested.**
+    `tests/spawn.spec.ts`'s ordering assertion still passes when
+    `yield agents.register(agent)` is replaced with a wrapper, because the
+    wrapper preserves the ORDER while losing the identity. **Fix (test only):**
+    a cordis effect's disposer carries `symbols.effect` metadata, and a yielded
+    disposer is re-parented into the composite effect as a labeled CHILD — so
+    the composite effect's children must contain `agents.register()`. A wrapper
+    drops the symbol and the child, and the new assertion fails. Verified by
+    mutation.
+42. **A dead subprocess leaves the agent reading `running`, not `idle`.** The
+    seam's pump ends when the SDK's iterator completes, but nothing calls
+    `CcSession.close()`, so the status machine never moves: `agent.status` stays
+    `running` forever, `whenIdle()` never settles, and `runMaintenance()` keeps
+    refusing the phase. Only an explicit close recovers, and disposal's bounded
+    drain is what keeps this from wedging plugin unload. **Not fixed here** —
+    the adapter has no signal to act on; the fix is one line in the seam
+    (close on pump completion when the session was not already closing) and is
+    a Phase 2 lifecycle change that wants its own live subprocess-kill test.
+    The current behaviour is pinned by `tests/orderings.spec.ts` so a future
+    seam that self-closes shows up there first. The adapter README's claim that
+    the agent "reads `idle`" in this state was wrong and has been corrected.
+43. **The live steer spec raced the model.** It waited 1.5s after
+    `status === 'running'` before steering; haiku finished counting to 30 in
+    under two seconds, so the steer landed on the turn boundary, was committed
+    by `completeTurn()` without ever running, and the merged text contained no
+    BANANA. **Fix (test only):** count to 300, and gate the steer on the first
+    `assistant/chunk` in the agent's own session log — the agent-layer
+    equivalent of the seam spec's first `stream_event`, which is how
+    `steer.live.spec.ts` has always avoided this. Confirmed over four
+    consecutive live runs.
+
 ## 6. Verification before you report
 
 ```sh
@@ -1309,15 +1567,36 @@ pnpm test                          # build, then vitest run (unit + composition)
 pnpm run test:live                 # OPT-IN: DSH_CC_LIVE=1, real subprocesses (§7a)
 ```
 
-All are green as of the Phase 2 Stage 3 merge point:
+All are green as of the **Phase 6 Stage 3 merge point**:
 
-- `pnpm test` — **137 passed / 9 skipped, 13 files (+9 skipped)**: 129 in the
-  three packages' unit specs, 8 in the composition acceptance test, and the nine
-  gated live specs collected-and-skipped. Every unit test runs offline against a
-  fake backend; `pnpm test` spawns no subprocess and makes no network call.
-- `pnpm run test:live` — **9 passed / 9 files** against the real SDK
+- `pnpm run typecheck` — clean across all three packages plus
+  `tsconfig.tests.json`, under NodeNext / strict / `exactOptionalPropertyTypes` /
+  `skipLibCheck: false`.
+- `pnpm run build` — clean.
+- `pnpm test` (build, then both vitest projects) — **417 passed / 38 skipped, 29
+  files (+26 skipped)**. The 38 skipped are the `DSH_CC_LIVE`-gated live specs,
+  collected and skipped. Every unit test runs offline against a fake backend;
+  `pnpm test` spawns no subprocess and makes no network call.
+  - `pnpm run test:unit` alone — **404 passed / 38 skipped**.
+  - `pnpm run test:composition` alone — **13 passed**, booting both `cordis.yml`
+    and `cordis-no-jobs.yml` through the real Loader against built `lib/` output.
+  - `packages/claude-code-agent` contributes **78 passed / 7 skipped**:
+    `agent.spec.ts` 30, `orderings.spec.ts` 22, `spawn.spec.ts` 14,
+    `inert.spec.ts` 5, `plugin.spec.ts` 4, `exports.spec.ts` 3.
+- `pnpm run test:live` — **38 passed / 26 files** against the real SDK
   (`claude-haiku-4-5-20251001`, claude.ai subscription, no `ANTHROPIC_API_KEY`),
-  ~68s of test time, with `pgrep` confirming zero surviving subprocesses.
+  ~62s wall, with `pgrep` confirming zero surviving subprocesses afterwards.
+  `packages/claude-code-agent/tests/live/` is 7 of those tests across 6 files.
+
+Two live-suite notes that are not defects in this integration:
+`packages/claude-code/tests/live/prewarm.live.spec.ts` fails intermittently under
+the 26-file parallel sweep (a neighbour consumes the shared pool's warm slot
+first) and passes in isolation and on a clean re-run — a parallel-machine
+contention flake, reproduced and then cleared here as it was in Phase 2's Stage
+2. And `record-fixtures.live.spec.ts` re-records three mirror fixtures on every
+live run; `mirror-golden.spec.ts` was re-run against the FRESH recording (6
+passed, projection still deterministic) before the fixtures were reverted, so
+the working tree stays scoped to the change under review.
 
 ## 7. The Phase 1 acceptance test
 
@@ -1388,6 +1667,19 @@ each driving a REAL Claude Code subprocess through the real backend and a real
   pass the agent's own dsh session as BOTH audit log and mirror target, which is
   what makes `approval/asked.data.callId` directly comparable to the mirrored
   `tool/call.data.callId`.
+- **Phase 6 added the adapter's own six files / seven tests**
+  (`packages/claude-code-agent/tests/live/`): basic drive with an approval routed
+  through the agent's identity, steer refold, `AskUserQuestion` answered as a
+  registry root, both `keepInbox` defaults, mid-turn dispose, and plugin-only
+  HMR. Every one of them spawns through `ctx.claudeCodeAgents.spawn()` — the
+  mounted service, i.e. the only entry point a human at the dsh UI has — never
+  `createClaudeCodeAgent()` or `CcSession` directly. `mountLiveAgent()` in that
+  directory's `helpers.ts` mounts `SessionStore` + `AgentRegistry` +
+  `UserQuestionService` + `ApprovalService` + a real `ClaudeCodeService` + the
+  adapter plugin as ONE composition, and exposes the adapter plugin's own fiber
+  separately so the HMR spec can dispose only that. What remains for Phase 7 is
+  failure injection (killing a subprocess out from under a live agent, which is
+  what would exercise correction 42) and the agent-card / UI surface.
 - **Running the live suite rewrites three fixtures.**
   `record-fixtures.live.spec.ts` re-records `plain-text.json`, `steer.json` and
   `tool-call.json` on every live run, so `git status` shows them modified

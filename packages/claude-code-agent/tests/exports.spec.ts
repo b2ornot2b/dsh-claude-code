@@ -16,16 +16,22 @@ function unwrapExports(exports: unknown): unknown {
   return (first as { default?: unknown }).default ?? first
 }
 
-/** Every runtime (value) export of the package entry. */
+/** Every runtime (value) export of the package entry, pinned by docs/phase1-api-contract.md. */
 const RUNTIME_EXPORTS = [
+  'CC_AGENT_PROVIDER',
+  'ClaudeCodeAgent',
+  'ClaudeCodeAgentService',
   'Config',
+  'DEFAULT_DISPOSE_DRAIN_MS',
   'INERT_DSH_MECHANISMS',
   'MOUNT_MARKER',
   'UNMOUNT_MARKER',
   'apply',
   'createClaudeCodeAgent',
+  'extractMessageText',
   'inject',
   'name',
+  'resolveCcAgentConfig',
 ].sort()
 
 describe('package entry shape', () => {
@@ -40,7 +46,7 @@ describe('package entry shape', () => {
     // With a default export present this would be that single value, and the
     // sibling name/inject/Config exports would be gone.
     expect(unwrapped.name).toBe('claude-code-agent')
-    expect(unwrapped.inject).toEqual(['agents', 'claudeCode'])
+    expect(unwrapped.inject).toEqual(['agents', 'claudeCode', 'sessions'])
     expect(typeof unwrapped.apply).toBe('function')
     expect(unwrapped.Config).toBeTypeOf('function')
   })
