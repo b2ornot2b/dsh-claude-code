@@ -31,10 +31,14 @@ close through this seam, and they are what supplies the ask target below. A sess
 with no ask target still fails CLOSED (every tool call denied with an explanation), which is
 the correct posture for a session nobody is watching.
 
+Phase 6 landed the CC-backed dsh `Agent` adapter
+(`@deepseek-ai/dsh-claude-code-agent`): it opens a session through this seam, mirrors it into a
+real dsh session sharing the same id, and registers it with `ctx.agents`. The one thing it needed
+here is `CcSession.setModel()` — a thin `query.setModel()` passthrough, and the only
+model-switching path a CC-backed agent has (see "Waterfalls that are silently inert").
+
 Still scaffolded, with the phase named in the code:
 
-- **Phase 6** — `@deepseek-ai/dsh-claude-code-agent`, the CC-backed dsh `Agent` adapter. It
-  mounts and logs its marker; it does not yet register an agent.
 - **Phase 7** — rich tool cards. Every tool renders through the generic card today
   (`presentCall` returns `card: 'generic'`); the Claude-Code-specific views come later.
 
@@ -325,8 +329,9 @@ not an edge case.
 `agent/pre-step`, `agent/request`, and `agent/request-error` are dispatched only around dsh's
 own model call, and `tools/*` events only by `ctx.tools`. A CC-backed agent makes neither
 call, so every plugin hooking them is inert for it. The Agent adapter package documents the
-substitutes (`inject()` → `shouldQuery: false` sends, `query.setModel()`,
-`applyFlagSettings()`, CC hooks mapped onto dsh event names).
+substitutes: `inject()` → `shouldQuery: false` sends, and model switching →
+`CcSession.setModel()` (this seam's `query.setModel()` passthrough), both shipped; plus
+`applyFlagSettings()` and CC hooks mapped onto dsh event names, which are not.
 
 ---
 
@@ -404,10 +409,10 @@ over its own transcript, which the dsh mirror neither feeds nor invalidates.
 - **Pre-warming starts helping from the SECOND open** — `startup()` freezes `cwd` (and every
   other option), so the first open of a given shape is always cold and the pool warms
   afterwards for the next one. A changed shape discards the held subprocess.
-- **No CC-backed dsh `Agent` yet (Phase 6)** — `@deepseek-ai/dsh-claude-code-agent` mounts
-  and resolves its injects, but registers no agent; and rich tool cards are Phase 7 (every
-  `claude_code_*` call renders through the generic card today). The six model-facing tools
-  themselves are real as of Phase 5 — see `@deepseek-ai/dsh-tool-claude-code`.
+- **Rich tool cards are still Phase 7** — every `claude_code_*` call renders through the
+  generic card today. The six model-facing tools themselves are real as of Phase 5 (see
+  `@deepseek-ai/dsh-tool-claude-code`), and the CC-backed dsh `Agent` is real as of Phase 6
+  (see `@deepseek-ai/dsh-claude-code-agent`).
 - **A subprocess that dies on its own does not close its session** — a `CcSession` reaches
   `closed` only through `close()`, so an externally killed CLI leaves the session (and any
   job tracking it) `running` until something calls `close()`. A seam-side "pump ended →

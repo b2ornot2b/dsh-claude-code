@@ -593,3 +593,41 @@ describe('CcSession: close', () => {
     expect(session.status).toBe('closed')
   })
 })
+
+describe('CcSession: setModel (the §7.1 model-switching substitute)', () => {
+  it('reaches the SDK query and updates the snapshot optimistically', async () => {
+    const { session, query } = await open({ defaults: { model: 'claude-haiku-4-5-20251001' } })
+    expect(session.snapshot().model).toBe('claude-haiku-4-5-20251001')
+
+    await session.setModel('claude-sonnet-4-5')
+
+    expect(query.models).toEqual(['claude-sonnet-4-5'])
+    expect(session.snapshot().model).toBe('claude-sonnet-4-5')
+  })
+
+  it('omitting the model asks for the CLI default and leaves the snapshot without one', async () => {
+    const { session, query } = await open({ defaults: { model: 'claude-haiku-4-5-20251001' } })
+
+    await session.setModel()
+
+    expect(query.models).toEqual([undefined])
+    expect(session.snapshot().model).toBeUndefined()
+  })
+
+  it('is overwritten by what the CLI actually adopted on its next system/init', async () => {
+    const { session, query } = await open()
+
+    await session.setModel('claude-sonnet-4-5')
+    await query.emitInit({ model: 'claude-haiku-4-5-20251001' })
+
+    expect(session.snapshot().model).toBe('claude-haiku-4-5-20251001')
+  })
+
+  it('refuses a closed session with SESSION_CLOSED', async () => {
+    const { session } = await open()
+    await session.close()
+
+    await expect(session.setModel('claude-sonnet-4-5'))
+      .rejects.toMatchObject({ name: 'ClaudeCodeError', code: 'SESSION_CLOSED' })
+  })
+})

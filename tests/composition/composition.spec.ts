@@ -46,6 +46,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 // (`ctx.claudeCode`, `ctx.tools`, `ctx.agents`) and are erased at runtime, so
 // no second copy of any package is loaded into this process.
 import type {} from '@deepseek-ai/dsh-claude-code'
+import type {} from '@deepseek-ai/dsh-claude-code-agent'
 import type {} from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-jobs'
@@ -275,6 +276,13 @@ describe('phase 1 acceptance: real cordis.yml + Loader composition', () => {
     const marker = records.find(record => record.name === 'claude-code-agent')
     expect(marker !== undefined, 'claude-code-agent mount marker should be logged').toBe(true)
     expect(String(marker?.args?.[0] ?? '')).toContain('mounted')
+
+    // Phase 6: the adapter provides a service now. Compared as a BOOLEAN —
+    // cordis hands out a fresh traceable proxy per access and an assert
+    // formatter that touches one throws `cannot get property "$$typeof"`.
+    expect(ctx.get('claudeCodeAgents') !== undefined, 'ctx.claudeCodeAgents should resolve').toBe(true)
+    // Mounting spawns nothing: an agent exists only when something asks for one.
+    expect(ctx.agents.list()).toEqual([])
   })
 
   it('mounts with no NOT_IMPLEMENTED anywhere on the mount path', () => {
@@ -325,7 +333,7 @@ describe('phase 1 acceptance: real cordis.yml + Loader composition', () => {
     await ctx.fiber.dispose()
     disposed = true
 
-    for (const key of ['claudeCode', 'tools', 'agents', 'sessions', 'loader'] as const) {
+    for (const key of ['claudeCode', 'claudeCodeAgents', 'tools', 'agents', 'sessions', 'loader'] as const) {
       expect(ctx.get(key), `ctx.${key} should be gone after dispose`).toBeUndefined()
     }
   })

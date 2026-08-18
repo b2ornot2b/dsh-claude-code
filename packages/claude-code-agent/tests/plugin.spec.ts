@@ -1,28 +1,45 @@
 import { Context } from '@deepseek-ai/cordis'
 import { describe, expect, it } from 'vitest'
 
-import { apply, Config, inject, MOUNT_MARKER, name, UNMOUNT_MARKER } from '@deepseek-ai/dsh-claude-code-agent'
+import {
+  apply, Config, inject, MOUNT_MARKER, name, resolveCcAgentConfig, UNMOUNT_MARKER,
+} from '@deepseek-ai/dsh-claude-code-agent'
 
 /**
- * Provide bare stubs for the two services this plugin injects, without
- * pulling in the real `dsh-agent` / `dsh-claude-code` packages — Phase 1
- * only needs their names present at mount, never their behavior.
+ * Provide bare stubs for the three services this plugin injects, without
+ * pulling in the real `dsh-agent` / `dsh-session` / `dsh-claude-code`
+ * packages — mounting only needs their names present.
  */
 function stubServices(ctx: Context): void {
   ctx.reflect.provide('agents', {} as never)
   ctx.reflect.provide('claudeCode', {} as never)
+  ctx.reflect.provide('sessions', {} as never)
 }
 
 describe('claude-code-agent plugin shape', () => {
   it('declares the documented name, inject list, and config schema', () => {
     expect(name).toBe('claude-code-agent')
-    expect(inject).toEqual(['agents', 'claudeCode'])
+    // `sessions` is not optional: an Agent needs a real, STORE-ATTACHED dsh
+    // Session, or the mirror's appends are published to nobody.
+    expect(inject).toEqual(['agents', 'claudeCode', 'sessions'])
     expect(Config).toBeTypeOf('function')
-    // Phase 1's schema accepts only an empty config.
-    expect(Config({})).toEqual({})
   })
 
-  it('mounts and disposes cleanly in a bare Context with stub agents/claudeCode present', async () => {
+  it('resolves its defaults, and treats an unset value as ABSENT', () => {
+    expect(resolveCcAgentConfig()).toEqual({ provider: 'claude-code', defaults: {} })
+    expect(resolveCcAgentConfig({ defaults: { cwd: '/workspace/repo' } }))
+      .toEqual({ provider: 'claude-code', defaults: { cwd: '/workspace/repo' } })
+    expect(resolveCcAgentConfig({ provider: 'cc', defaults: { model: 'm', permissionMode: 'plan' } }))
+      .toEqual({ provider: 'cc', defaults: { model: 'm', permissionMode: 'plan' } })
+    // `exactOptionalPropertyTypes`: an unset key is missing, never present-and-undefined.
+    expect('cwd' in resolveCcAgentConfig().defaults).toBe(false)
+  })
+
+  it('rejects a permission mode the seam does not know', () => {
+    expect(() => resolveCcAgentConfig({ defaults: { permissionMode: 'yolo' as never } })).toThrow()
+  })
+
+  it('mounts and disposes cleanly, providing ctx.claudeCodeAgents', async () => {
     const ctx = new Context()
     await ctx.plugin(stubServices)
 
@@ -32,6 +49,10 @@ describe('claude-code-agent plugin shape', () => {
       apply(inner)
     }
     const fiber = await ctx.plugin(mountForTest)
+
+    expect(ctx.get('claudeCodeAgents') !== undefined, 'ctx.claudeCodeAgents should resolve').toBe(true)
+    expect(ctx.claudeCodeAgents.list()).toEqual([])
+    expect(ctx.claudeCodeAgents.config).toEqual({ provider: 'claude-code', defaults: {} })
 
     // Read the built-in logger's buffering exporter rather than spying on
     // `ctx.logger` directly: cordis 4 hands out a fresh traceable proxy per
@@ -46,10 +67,9 @@ describe('claude-code-agent plugin shape', () => {
 
     const unmountMessages = ctx.logger.buffer.filter((m) => m.args.includes(UNMOUNT_MARKER))
     expect(unmountMessages.length).toBeGreaterThan(0)
+    // HMR-safety: the service is gone with its fiber.
+    expect(ctx.get('claudeCodeAgents') === undefined, 'ctx.claudeCodeAgents should be gone').toBe(true)
 
-    // HMR-safety: the plugin provided no service of its own, so there is
-    // nothing else to assert absent — the marker effect is the only trace,
-    // and it is proven torn down above.
     await ctx.fiber.dispose()
   })
 })
