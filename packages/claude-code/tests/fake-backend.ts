@@ -47,6 +47,8 @@ export class FakeQuery implements CcBackendQuery {
 
   #queue: CcSdkMessage[] = []
   #done = false
+  /** Set by {@link FakeQuery.failStream}: raised out of the iterator once the queue drains. */
+  #failure: unknown
   #wake: (() => void) | undefined
   #waiting: Promise<void>
 
@@ -97,6 +99,19 @@ export class FakeQuery implements CcBackendQuery {
   }
 
   /**
+   * Make the message stream THROW rather than complete — a transport failure
+   * (a broken pipe, a subprocess killed hard enough that the SDK's reader
+   * errors) as distinct from an orderly end of stream.
+   * @param error - the failure to raise out of the iterator.
+   * @returns nothing.
+   */
+  failStream(error: unknown = new Error('claude-code: transport died')): void {
+    this.#failure = error
+    this.#done = true
+    this.signal()
+  }
+
+  /**
    * The session's message source.
    * @returns an iterator over emitted messages.
    */
@@ -106,6 +121,9 @@ export class FakeQuery implements CcBackendQuery {
         const next = this.#queue.shift()
         if (next !== undefined) yield next
       }
+      // Everything already emitted is delivered first, THEN the failure: a
+      // transport that dies mid-turn does not retract what it had sent.
+      if (this.#failure !== undefined) throw this.#failure
       if (this.#done) return
       await this.#waiting
     }

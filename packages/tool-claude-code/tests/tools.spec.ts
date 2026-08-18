@@ -356,7 +356,7 @@ describe('claude_code_send / wait / status / cancel / close', () => {
       expect(closed.isError, JSON.stringify(closed.error)).toBe(false)
       expect(closed.value).toEqual({ closed: true })
       expect(query.closed).toBe(true)
-      expect(harness.ctx.claudeCode.get(sessionId as never)).toBeUndefined()
+      expect(harness.ctx.claudeCode.session(sessionId as never)).toBeUndefined()
 
       const again = await harness.call('claude_code_close', { session_id: sessionId })
       expect(again.value).toEqual({ closed: true })

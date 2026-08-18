@@ -74,7 +74,7 @@ describe.skipIf(!LIVE)('ask channel — timeout + fallback, live (§4.6, DSH_CC_
         // will never come.
         const closed = await service.close(snap.id)
         expect(closed).toBe(true)
-        expect(service.get(snap.id)).toBeUndefined()
+        expect(service.session(snap.id)).toBeUndefined()
       } finally {
         await disposeLiveWithAsk(mounted)
         removeCwd(cwd)

@@ -130,6 +130,32 @@ export type CcSessionStatus = 'starting' | 'running' | 'idle' | 'closed'
 export const CC_SESSION_STATUSES: readonly CcSessionStatus[] = ['starting', 'running', 'idle', 'closed']
 
 /**
+ * WHY a session reached `closed`. A session reaches `closed` through exactly one
+ * path — the close sequence in `CcSession.close()` — but it can be ENTERED for
+ * three different reasons, and a consumer has to tell them apart:
+ *
+ * - `closed` — somebody asked: `claude_code_close`, `ClaudeCode.close()`, owner
+ *   disposal, plugin teardown. The subprocess was alive and was shut down.
+ * - `exited` — the subprocess ended on its own with no turn in flight. A clean
+ *   exit: the CLI was done, or something outside dsh stopped it between turns.
+ *   Any `waitForResult()` parked at that moment is answered with the last real
+ *   result rather than failed, because the session did produce one.
+ * - `crashed` — the subprocess ended MID-TURN, or its message iterator threw.
+ *   The turn it was running will never produce a result: waiters fail with
+ *   `SESSION_CLOSED`, the mirror's dangling turn is finalized as aborted, and a
+ *   background job settles `failed` rather than `completed`.
+ *
+ * The distinction is observable ONLY through {@link CcSessionSnapshot.closeReason}
+ * and {@link CcSession.onClose}; `status` collapses all three to `closed`,
+ * because for everything that merely asks "can I still send to this?" they are
+ * the same answer.
+ */
+export type CcCloseReason = 'closed' | 'exited' | 'crashed'
+
+/** Every {@link CcCloseReason}. */
+export const CC_CLOSE_REASONS: readonly CcCloseReason[] = ['closed', 'exited', 'crashed']
+
+/**
  * The diagnostics sink a session writes subprocess stderr and lifecycle notes
  * to. Structural on purpose: cordis's `ctx.logger` satisfies it, and so does a
  * two-line test double — the seam never needs the rest of a logger's surface.
@@ -228,6 +254,17 @@ export interface CcSessionSnapshot {
   readonly pendingAsks: number
   /** Context-window occupancy, when the session has reported usage. */
   readonly contextUsage?: CcContextUsage
+  /**
+   * Why the session closed. Present exactly when `status` is `closed`, absent
+   * otherwise — an ADDITIVE optional field, so every consumer written before it
+   * existed still reads a valid snapshot.
+   *
+   * This is the only place `exited`/`crashed` are distinguishable: a subprocess
+   * that died on its own now closes its own session (the pump-completion close
+   * path), which means a `closed` snapshot no longer implies anybody asked for
+   * it. See {@link CcCloseReason}.
+   */
+  readonly closeReason?: CcCloseReason
 }
 
 /**

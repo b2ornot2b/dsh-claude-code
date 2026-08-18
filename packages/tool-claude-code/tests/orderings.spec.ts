@@ -40,7 +40,7 @@ describe('close during a synchronous open', () => {
       // The seam's own code, re-thrown untouched: this is NOT the tool layer's
       // CC_TIMEOUT, because nothing timed out and the session is not still open.
       expect(result.error?.info?.code).toBe('SESSION_CLOSED')
-      expect(harness.ctx.claudeCode.get(sessionId as never)).toBeUndefined()
+      expect(harness.ctx.claudeCode.session(sessionId as never)).toBeUndefined()
       expect(query.closed).toBe(true)
     } finally {
       await harness.dispose()
@@ -57,17 +57,18 @@ describe('close during a synchronous open', () => {
 })
 
 describe('calls that arrive after the session is gone', () => {
-  it('answers CC_NO_SESSION for a send, a wait, a status and a cancel issued after close', async () => {
+  it('answers CC_NO_SESSION for a send, a wait and a cancel issued after close', async () => {
     const harness = await mountTools()
     try {
       const opened = await harness.call('claude_code_open', { cwd: CWD })
       const sessionId = (opened.value as { session_id: string }).session_id
       await harness.call('claude_code_close', { session_id: sessionId })
 
+      // `claude_code_status` is deliberately NOT in this list — see the test
+      // below. Every tool here needs a live actor to drive.
       const calls: Array<[string, Record<string, unknown>]> = [
         ['claude_code_send', { session_id: sessionId, message: 'still there?', mode: 'followup' }],
         ['claude_code_wait', { session_id: sessionId, timeout_ms: 50 }],
-        ['claude_code_status', { session_id: sessionId }],
         ['claude_code_cancel', { session_id: sessionId }],
       ]
       for (const [toolName, args] of calls) {
@@ -78,6 +79,36 @@ describe('calls that arrive after the session is gone', () => {
         expect(result.error?.info?.code, `${toolName} code`).toBe('CC_NO_SESSION')
         expect(String(result.error?.message), `${toolName} message`).toContain(sessionId)
       }
+    } finally {
+      await harness.dispose()
+    }
+  })
+
+  it('answers claude_code_status for a closed session, with the reason it closed', async () => {
+    const harness = await mountTools()
+    try {
+      const opened = await harness.call('claude_code_open', { cwd: CWD })
+      const sessionId = (opened.value as { session_id: string }).session_id
+      await harness.call('claude_code_close', { session_id: sessionId })
+
+      // The one tool whose whole job is answering "what happened to it?".
+      // CC_NO_SESSION would say "it was never opened here", which is false and
+      // sends the model off to open a second session.
+      const status = await harness.call('claude_code_status', { session_id: sessionId })
+      expect(status.isError).toBe(false)
+      expect(status.value).toMatchObject({ status: 'closed', close_reason: 'closed', pending_asks: 0 })
+    } finally {
+      await harness.dispose()
+    }
+  })
+
+  it('still answers CC_NO_SESSION from claude_code_status for an id nothing here ever opened', async () => {
+    const harness = await mountTools()
+    try {
+      const stranger = '11111111-2222-4333-8444-555555555555'
+      const result = await harness.call('claude_code_status', { session_id: stranger })
+      expect(result.isError).toBe(true)
+      expect(result.error?.info?.code).toBe('CC_NO_SESSION')
     } finally {
       await harness.dispose()
     }

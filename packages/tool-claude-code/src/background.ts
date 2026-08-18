@@ -30,7 +30,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
-import type { CcSession, CcSessionId } from '@deepseek-ai/dsh-claude-code'
+import type { CcCloseReason, CcSession, CcSessionId } from '@deepseek-ai/dsh-claude-code'
 import type { JobHooks, JobId, JobOutcome } from '@deepseek-ai/dsh-jobs'
 
 import {
@@ -142,6 +142,50 @@ export async function startBackgroundSession(
 }
 
 /**
+ * Decide one backgrounded session's terminal {@link JobOutcome} from how its
+ * session closed.
+ *
+ * This is the settlement half of the seam's dead-subprocess fix. Before it, a
+ * subprocess that died on its own never closed its session, so the job stayed
+ * `running` forever (README "a subprocess that dies on its own does not settle
+ * its job"). Now it closes itself, and the job has to say WHAT happened:
+ *
+ * | close reason | outcome | why |
+ * |---|---|---|
+ * | (cancelled) | `killed` | `job_kill`/owner disposal asked; the reason is the registry's own |
+ * | `crashed` | `failed` | the subprocess died MID-TURN — the work it was given did not finish |
+ * | `exited` | `completed` | the subprocess ended between turns; every turn it was given ran |
+ * | `closed` | `completed` | `claude_code_close`, or the session's owner tore it down |
+ *
+ * A cancel WINS over the close reason: `job_kill` closes the session, so the
+ * close that follows is `'closed'` (or `'crashed'`, if a turn was in flight),
+ * and reporting either as anything but `killed` would lose the fact that a
+ * human stopped it.
+ *
+ * @param reason - why the Claude Code session closed.
+ * @param cancelled - whether {@link JobHooks.cancel} had already been called.
+ * @param cancelReason - the registry's cancellation reason, when it gave one.
+ * @returns the outcome to settle `done` with. Never throws — `done` never rejects.
+ */
+export function outcomeFor(
+  reason: CcCloseReason,
+  cancelled: boolean,
+  cancelReason?: string,
+): JobOutcome {
+  if (cancelled) return { status: 'killed', detail: cancelReason ?? 'cancelled' }
+  if (reason === 'crashed') {
+    return {
+      status: 'failed',
+      detail: 'the Claude Code subprocess ended mid-turn; the turn it was running produced no result',
+    }
+  }
+  return {
+    status: 'completed',
+    detail: reason === 'exited' ? 'the Claude Code subprocess exited' : 'session closed',
+  }
+}
+
+/**
  * The producer behind one backgrounded session: it owns the open, the output
  * buffer, the cancel request and the single settlement of `done`.
  */
@@ -216,11 +260,9 @@ class BackgroundSession {
         const text = projectResult(envelope).result
         if (text !== undefined) this.#pending.push(text)
       })
-      opened.session.onClose(() => {
+      opened.session.onClose((reason) => {
         detach()
-        this.settle(this.#cancelled
-          ? { status: 'killed', detail: this.#cancelReason ?? 'cancelled' }
-          : { status: 'completed', detail: 'session closed' })
+        this.settle(outcomeFor(reason, this.#cancelled, this.#cancelReason))
       })
       this.#settleOpened(opened.id)
       // A kill that landed while the open was still in flight: the hooks had no

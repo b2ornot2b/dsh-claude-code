@@ -93,92 +93,27 @@
           "model": "claude-haiku-4-5-20251001",
           "permissionMode": "default",
           "slash_commands": [
-            "deep-research",
-            "design-sync",
-            "dataviz",
-            "update-config",
-            "verify",
-            "debug",
-            "code-review",
-            "simplify",
-            "batch",
-            "fewer-permission-prompts",
-            "doctor",
-            "loop",
-            "schedule",
-            "claude-api",
-            "run",
-            "run-skill-generator",
-            "agents",
-            "auto-mode-setup",
-            "autocompact",
-            "clear",
-            "color",
-            "compact",
-            "config",
-            "context",
-            "effort",
-            "fast",
-            "heapdump",
-            "init",
-            "mcp",
-            "import",
-            "model",
-            "__remote-workflow",
-            "workflow-launch-exec",
-            "reload-skills",
-            "rename",
-            "ultrareview",
-            "security-review",
-            "usage-credits",
-            "extra-usage",
-            "usage",
-            "insights",
-            "recap",
-            "goal",
-            "design",
-            "design-consent",
-            "design-revoke",
-            "list-agents",
-            "team-onboarding"
+            "scrubbed-machine-local-list"
           ],
           "terminal_slash_commands": [
-            "doctor",
-            "color"
+            "scrubbed-machine-local-list"
           ],
           "apiKeySource": "none",
           "claude_code_version": "2.1.233",
           "output_style": "default",
           "agents": [
-            "claude",
-            "Explore",
-            "general-purpose",
-            "Plan",
-            "statusline-setup"
+            "scrubbed-machine-local-list"
           ],
           "skills": [
-            "deep-research",
-            "design-sync",
-            "dataviz",
-            "update-config",
-            "verify",
-            "debug",
-            "code-review",
-            "simplify",
-            "batch",
-            "fewer-permission-prompts",
-            "doctor",
-            "loop",
-            "schedule",
-            "claude-api",
-            "run",
-            "run-skill-generator"
+            "scrubbed-machine-local-list"
           ],
-          "plugins": [],
+          "plugins": [
+            "scrubbed-machine-local-list"
+          ],
           "capabilities": [
             "interrupt_receipt_v1",
             "interrupt_cancel_queued_v1",
-            "msg-scrubbed-0001"
+            "msg_lifecycle_v1"
           ],
           "analytics_disabled": false,
           "product_feedback_disabled": false,
@@ -218,12 +153,35 @@
       "kind": "message",
       "envelope": {
         "message": {
+          "type": "rate_limit_event",
+          "rate_limit_info": {
+            "status": "allowed",
+            "resetsAt": 0,
+            "rateLimitType": "five_hour",
+            "overageStatus": "rejected",
+            "overageDisabledReason": "org_level_disabled",
+            "isUsingOverage": false
+          },
+          "uuid": "uuid-scrubbed-0007",
+          "session_id": "uuid-scrubbed-0003"
+        },
+        "meta": {
+          "interruptArtifact": false,
+          "interruptedTurn": false,
+          "reinit": false
+        }
+      }
+    },
+    {
+      "kind": "message",
+      "envelope": {
+        "message": {
           "type": "stream_event",
           "event": {
             "type": "message_start",
             "message": {
               "model": "claude-haiku-4-5-20251001",
-              "id": "msg-scrubbed-0002",
+              "id": "msg-scrubbed-0001",
               "type": "message",
               "role": "assistant",
               "content": [],
@@ -247,7 +205,7 @@
           },
           "session_id": "uuid-scrubbed-0003",
           "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0007",
+          "uuid": "uuid-scrubbed-0008",
           "ttft_ms": 0
         },
         "meta": {
@@ -268,12 +226,12 @@
             "content_block": {
               "type": "thinking",
               "thinking": "",
-              "signature": ""
+              "signature": "scrubbed-signature"
             }
           },
           "session_id": "uuid-scrubbed-0003",
           "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0008"
+          "uuid": "uuid-scrubbed-0009"
         },
         "meta": {
           "interruptArtifact": false,
@@ -288,9 +246,9 @@
         "message": {
           "type": "system",
           "subtype": "thinking_tokens",
-          "estimated_tokens": 4,
-          "estimated_tokens_delta": 4,
-          "uuid": "uuid-scrubbed-0009",
+          "estimated_tokens": 0,
+          "estimated_tokens_delta": 0,
+          "uuid": "uuid-scrubbed-0010",
           "session_id": "uuid-scrubbed-0003"
         },
         "meta": {
@@ -310,36 +268,13 @@
             "index": 0,
             "delta": {
               "type": "thinking_delta",
-              "thinking": "The user wants",
+              "thinking": "The user is asking",
               "estimated_tokens": null
             }
           },
           "session_id": "uuid-scrubbed-0003",
           "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0010"
-        },
-        "meta": {
-          "interruptArtifact": false,
-          "interruptedTurn": false,
-          "reinit": false
-        }
-      }
-    },
-    {
-      "kind": "message",
-      "envelope": {
-        "message": {
-          "type": "rate_limit_event",
-          "rate_limit_info": {
-            "status": "allowed",
-            "resetsAt": 0,
-            "rateLimitType": "five_hour",
-            "overageStatus": "rejected",
-            "overageDisabledReason": "out_of_credits",
-            "isUsingOverage": false
-          },
-          "uuid": "uuid-scrubbed-0011",
-          "session_id": "uuid-scrubbed-0003"
+          "uuid": "uuid-scrubbed-0011"
         },
         "meta": {
           "interruptArtifact": false,
@@ -354,8 +289,8 @@
         "message": {
           "type": "system",
           "subtype": "thinking_tokens",
-          "estimated_tokens": 41,
-          "estimated_tokens_delta": 37,
+          "estimated_tokens": 0,
+          "estimated_tokens_delta": 0,
           "uuid": "uuid-scrubbed-0012",
           "session_id": "uuid-scrubbed-0003"
         },
@@ -376,7 +311,7 @@
             "index": 0,
             "delta": {
               "type": "thinking_delta",
-              "thinking": " me to run `echo fixture-hello` using the Bash tool and then report exactly what it printed in one short sentence.\n\nLet me call the Bash tool to run",
+              "thinking": " me to run a bash command `echo fixture-hello` and then report exactly what it printed in one short sentence.\n\nLet me run the command using the",
               "estimated_tokens": null
             }
           },
@@ -397,8 +332,8 @@
         "message": {
           "type": "system",
           "subtype": "thinking_tokens",
-          "estimated_tokens": 45,
-          "estimated_tokens_delta": 4,
+          "estimated_tokens": 0,
+          "estimated_tokens_delta": 0,
           "uuid": "uuid-scrubbed-0014",
           "session_id": "uuid-scrubbed-0003"
         },
@@ -419,7 +354,7 @@
             "index": 0,
             "delta": {
               "type": "thinking_delta",
-              "thinking": " this command.",
+              "thinking": " Bash tool.",
               "estimated_tokens": null
             }
           },
@@ -440,8 +375,8 @@
         "message": {
           "type": "system",
           "subtype": "thinking_tokens",
-          "estimated_tokens": 113,
-          "estimated_tokens_delta": 68,
+          "estimated_tokens": 0,
+          "estimated_tokens_delta": 0,
           "uuid": "uuid-scrubbed-0016",
           "session_id": "uuid-scrubbed-0003"
         },
@@ -462,7 +397,7 @@
             "index": 0,
             "delta": {
               "type": "signature_delta",
-              "signature": "ErwDCqgBCBAYAipAK2Q3VkRpwVKgPjgvVh3VUOjkFlVVWNcn49PRUV7UWxmzcW4wkHNH14qHs5cR9JWMyhzWbyYGs7E4scrkA7ClETIZY2xhdWRlLWhhaWt1LTQtNS0yMDI1MTAwMTgAQgh0aGlua2luZ1okYzM0MWE5YTYtOWY3Yi00OTEyLWIyNDEtYjExODhiNjBhMWRlchCAh6VC6syYqG9oxmFJxDd3iAEBEgzTb3ZvJUV702W9pkAaDLCW9b1+FNlUbNjJGyIwKZ+Ipt7GK56QlffmjMF8sB1f+tedykO1sxRg+oMDeYL0je16jxDQVMGHffjlx3g0KsABySkiXz9Ur+4SKlh2J1Qzo345F1ksVLxEeY317OwqwD5aUKRkqpNNlhY7we01s0PZ4N9/zGJyG2VaVrRqTuJykDaDuB+sKiffACSptL6ynfGokG2fE5UIn3fKX4VZKZgkXQ7BCDl4ZEkzZqmKw1C400NVwJaC5TXgeG/DFVoleTjXNR9USRHT3k3h4xEC+I1bJhlfvHIquPNHkhVxReKfH1zDZ1iBOsYiJQzsW7HsfrJYhOJhP6AIrfbqRxFQ2eDZGAE="
+              "signature": "scrubbed-signature"
             }
           },
           "session_id": "uuid-scrubbed-0003",
@@ -483,14 +418,14 @@
           "type": "assistant",
           "message": {
             "model": "claude-haiku-4-5-20251001",
-            "id": "msg-scrubbed-0002",
+            "id": "msg-scrubbed-0001",
             "type": "message",
             "role": "assistant",
             "content": [
               {
                 "type": "thinking",
-                "thinking": "The user wants me to run `echo fixture-hello` using the Bash tool and then report exactly what it printed in one short sentence.\n\nLet me call the Bash tool to run this command.",
-                "signature": "ErwDCqgBCBAYAipAK2Q3VkRpwVKgPjgvVh3VUOjkFlVVWNcn49PRUV7UWxmzcW4wkHNH14qHs5cR9JWMyhzWbyYGs7E4scrkA7ClETIZY2xhdWRlLWhhaWt1LTQtNS0yMDI1MTAwMTgAQgh0aGlua2luZ1okYzM0MWE5YTYtOWY3Yi00OTEyLWIyNDEtYjExODhiNjBhMWRlchCAh6VC6syYqG9oxmFJxDd3iAEBEgzTb3ZvJUV702W9pkAaDLCW9b1+FNlUbNjJGyIwKZ+Ipt7GK56QlffmjMF8sB1f+tedykO1sxRg+oMDeYL0je16jxDQVMGHffjlx3g0KsABySkiXz9Ur+4SKlh2J1Qzo345F1ksVLxEeY317OwqwD5aUKRkqpNNlhY7we01s0PZ4N9/zGJyG2VaVrRqTuJykDaDuB+sKiffACSptL6ynfGokG2fE5UIn3fKX4VZKZgkXQ7BCDl4ZEkzZqmKw1C400NVwJaC5TXgeG/DFVoleTjXNR9USRHT3k3h4xEC+I1bJhlfvHIquPNHkhVxReKfH1zDZ1iBOsYiJQzsW7HsfrJYhOJhP6AIrfbqRxFQ2eDZGAE="
+                "thinking": "The user is asking me to run a bash command `echo fixture-hello` and then report exactly what it printed in one short sentence.\n\nLet me run the command using the Bash tool.",
+                "signature": "scrubbed-signature"
               }
             ],
             "stop_reason": null,
@@ -514,8 +449,8 @@
           "parent_tool_use_id": null,
           "session_id": "uuid-scrubbed-0003",
           "uuid": "uuid-scrubbed-0018",
-          "timestamp": "2026-08-17T22:46:20.596Z",
-          "request_id": "req_011Ce98fxbDwhsMhDSUpgdEv"
+          "timestamp": "1970-01-01T00:00:00.000Z",
+          "request_id": "req-scrubbed-0001"
         },
         "meta": {
           "interruptArtifact": false,
@@ -631,7 +566,7 @@
             "index": 1,
             "delta": {
               "type": "input_json_delta",
-              "partial_json": "\", \"description\": \"Run echo command to print fixture-hello"
+              "partial_json": "\", \"description\": \"Print the string fixture-hello"
             }
           },
           "session_id": "uuid-scrubbed-0003",
@@ -676,7 +611,7 @@
           "type": "assistant",
           "message": {
             "model": "claude-haiku-4-5-20251001",
-            "id": "msg-scrubbed-0002",
+            "id": "msg-scrubbed-0001",
             "type": "message",
             "role": "assistant",
             "content": [
@@ -686,7 +621,7 @@
                 "name": "Bash",
                 "input": {
                   "command": "echo fixture-hello",
-                  "description": "Run echo command to print fixture-hello"
+                  "description": "Print the string fixture-hello"
                 },
                 "caller": {
                   "type": "direct"
@@ -714,8 +649,8 @@
           "parent_tool_use_id": null,
           "session_id": "uuid-scrubbed-0003",
           "uuid": "uuid-scrubbed-0025",
-          "timestamp": "2026-08-17T22:46:20.937Z",
-          "request_id": "req_011Ce98fxbDwhsMhDSUpgdEv"
+          "timestamp": "1970-01-01T00:00:00.000Z",
+          "request_id": "req-scrubbed-0001"
         },
         "meta": {
           "interruptArtifact": false,
@@ -831,7 +766,7 @@
           "parent_tool_use_id": null,
           "session_id": "uuid-scrubbed-0003",
           "uuid": "uuid-scrubbed-0029",
-          "timestamp": "2026-08-17T22:46:21.669Z",
+          "timestamp": "1970-01-01T00:00:00.000Z",
           "tool_use_result": {
             "stdout": "fixture-hello",
             "stderr": "",
@@ -873,7 +808,7 @@
             "type": "message_start",
             "message": {
               "model": "claude-haiku-4-5-20251001",
-              "id": "msg-scrubbed-0003",
+              "id": "msg-scrubbed-0002",
               "type": "message",
               "role": "assistant",
               "content": [],
@@ -918,7 +853,7 @@
             "content_block": {
               "type": "thinking",
               "thinking": "",
-              "signature": ""
+              "signature": "scrubbed-signature"
             }
           },
           "session_id": "uuid-scrubbed-0003",
@@ -938,8 +873,8 @@
         "message": {
           "type": "system",
           "subtype": "thinking_tokens",
-          "estimated_tokens": 1,
-          "estimated_tokens_delta": 1,
+          "estimated_tokens": 0,
+          "estimated_tokens_delta": 0,
           "uuid": "uuid-scrubbed-0033",
           "session_id": "uuid-scrubbed-0003"
         },
@@ -960,7 +895,7 @@
             "index": 0,
             "delta": {
               "type": "thinking_delta",
-              "thinking": "The",
+              "thinking": "The command",
               "estimated_tokens": null
             }
           },
@@ -981,8 +916,8 @@
         "message": {
           "type": "system",
           "subtype": "thinking_tokens",
-          "estimated_tokens": 19,
-          "estimated_tokens_delta": 18,
+          "estimated_tokens": 0,
+          "estimated_tokens_delta": 0,
           "uuid": "uuid-scrubbed-0035",
           "session_id": "uuid-scrubbed-0003"
         },
@@ -1003,7 +938,7 @@
             "index": 0,
             "delta": {
               "type": "thinking_delta",
-              "thinking": " command `echo fixture-hello` printed exactly `fixture-hello` followed",
+              "thinking": " executed successfully and printed \"fixture-hello\" to stdout. The user asked",
               "estimated_tokens": null
             }
           },
@@ -1024,8 +959,8 @@
         "message": {
           "type": "system",
           "subtype": "thinking_tokens",
-          "estimated_tokens": 39,
-          "estimated_tokens_delta": 20,
+          "estimated_tokens": 0,
+          "estimated_tokens_delta": 0,
           "uuid": "uuid-scrubbed-0037",
           "session_id": "uuid-scrubbed-0003"
         },
@@ -1046,7 +981,7 @@
             "index": 0,
             "delta": {
               "type": "thinking_delta",
-              "thinking": " by a newline. Let me report this in one short sentence as the user requested.",
+              "thinking": " me to tell them exactly what it printed in one short sentence.",
               "estimated_tokens": null
             }
           },
@@ -1067,8 +1002,8 @@
         "message": {
           "type": "system",
           "subtype": "thinking_tokens",
-          "estimated_tokens": 107,
-          "estimated_tokens_delta": 68,
+          "estimated_tokens": 0,
+          "estimated_tokens_delta": 0,
           "uuid": "uuid-scrubbed-0039",
           "session_id": "uuid-scrubbed-0003"
         },
@@ -1089,7 +1024,7 @@
             "index": 0,
             "delta": {
               "type": "signature_delta",
-              "signature": "EqMDCqgBCBAYAipAdPNQnmeLAOkSj49QaxVf2zI6dt5sl+m/AAGNs1dg/hd68qMN+xcY14pxBe+tQhHaFxOJ7ALw3OZR8dNaQqucVzIZY2xhdWRlLWhhaWt1LTQtNS0yMDI1MTAwMTgAQgh0aGlua2luZ1okYzM0MWE5YTYtOWY3Yi00OTEyLWIyNDEtYjExODhiNjBhMWRlchCAh6VC6syYqG9oxmFJxDd3iAEBEgzxiPIAb3FqSJ5uGcUaDNj0E1mFaooQYvZH8yIwV9LbPXF36hJENz6eThh59u1zpFOJy4UF9bsfvWwYgwEnULenuOYSFN0dQTNDZp7vKqcBGnJX1RzNB5owLiTzNRhUwohJMB4rg+tZhfQOBimGwi1htJ91qro6BI9oWZGSevDga9Fm/kbsy3Sf6IZ4luyg02qdA5yXSmbq1Gm0hyMoKVdy7vygZhwCxz8/5eKBAz0XoGi6c+Of2RAea0RWR6DjrgnIB0DVW9aksbR/jgN8D9EDwefP5GI/mvGh4cTqrecyR66C9F7xCV7wl+peqjlDHgULoLg6iXIYAQ=="
+              "signature": "scrubbed-signature"
             }
           },
           "session_id": "uuid-scrubbed-0003",
@@ -1110,14 +1045,14 @@
           "type": "assistant",
           "message": {
             "model": "claude-haiku-4-5-20251001",
-            "id": "msg-scrubbed-0003",
+            "id": "msg-scrubbed-0002",
             "type": "message",
             "role": "assistant",
             "content": [
               {
                 "type": "thinking",
-                "thinking": "The command `echo fixture-hello` printed exactly `fixture-hello` followed by a newline. Let me report this in one short sentence as the user requested.",
-                "signature": "EqMDCqgBCBAYAipAdPNQnmeLAOkSj49QaxVf2zI6dt5sl+m/AAGNs1dg/hd68qMN+xcY14pxBe+tQhHaFxOJ7ALw3OZR8dNaQqucVzIZY2xhdWRlLWhhaWt1LTQtNS0yMDI1MTAwMTgAQgh0aGlua2luZ1okYzM0MWE5YTYtOWY3Yi00OTEyLWIyNDEtYjExODhiNjBhMWRlchCAh6VC6syYqG9oxmFJxDd3iAEBEgzxiPIAb3FqSJ5uGcUaDNj0E1mFaooQYvZH8yIwV9LbPXF36hJENz6eThh59u1zpFOJy4UF9bsfvWwYgwEnULenuOYSFN0dQTNDZp7vKqcBGnJX1RzNB5owLiTzNRhUwohJMB4rg+tZhfQOBimGwi1htJ91qro6BI9oWZGSevDga9Fm/kbsy3Sf6IZ4luyg02qdA5yXSmbq1Gm0hyMoKVdy7vygZhwCxz8/5eKBAz0XoGi6c+Of2RAea0RWR6DjrgnIB0DVW9aksbR/jgN8D9EDwefP5GI/mvGh4cTqrecyR66C9F7xCV7wl+peqjlDHgULoLg6iXIYAQ=="
+                "thinking": "The command executed successfully and printed \"fixture-hello\" to stdout. The user asked me to tell them exactly what it printed in one short sentence.",
+                "signature": "scrubbed-signature"
               }
             ],
             "stop_reason": null,
@@ -1141,8 +1076,8 @@
           "parent_tool_use_id": null,
           "session_id": "uuid-scrubbed-0003",
           "uuid": "uuid-scrubbed-0041",
-          "timestamp": "2026-08-17T22:46:23.055Z",
-          "request_id": "req_011Ce98g9z5KMtGYRaZzUdPx"
+          "timestamp": "1970-01-01T00:00:00.000Z",
+          "request_id": "req-scrubbed-0002"
         },
         "meta": {
           "interruptArtifact": false,
@@ -1205,7 +1140,7 @@
             "index": 1,
             "delta": {
               "type": "text_delta",
-              "text": "It printed"
+              "text": "It printed `fixture-hello`."
             }
           },
           "session_id": "uuid-scrubbed-0003",
@@ -1223,34 +1158,10 @@
       "kind": "message",
       "envelope": {
         "message": {
-          "type": "stream_event",
-          "event": {
-            "type": "content_block_delta",
-            "index": 1,
-            "delta": {
-              "type": "text_delta",
-              "text": " `fixture-hello`."
-            }
-          },
-          "session_id": "uuid-scrubbed-0003",
-          "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0045"
-        },
-        "meta": {
-          "interruptArtifact": false,
-          "interruptedTurn": false,
-          "reinit": false
-        }
-      }
-    },
-    {
-      "kind": "message",
-      "envelope": {
-        "message": {
           "type": "assistant",
           "message": {
             "model": "claude-haiku-4-5-20251001",
-            "id": "msg-scrubbed-0003",
+            "id": "msg-scrubbed-0002",
             "type": "message",
             "role": "assistant",
             "content": [
@@ -1279,9 +1190,9 @@
           },
           "parent_tool_use_id": null,
           "session_id": "uuid-scrubbed-0003",
-          "uuid": "uuid-scrubbed-0046",
-          "timestamp": "2026-08-17T22:46:23.119Z",
-          "request_id": "req_011Ce98g9z5KMtGYRaZzUdPx"
+          "uuid": "uuid-scrubbed-0045",
+          "timestamp": "1970-01-01T00:00:00.000Z",
+          "request_id": "req-scrubbed-0002"
         },
         "meta": {
           "interruptArtifact": false,
@@ -1301,7 +1212,7 @@
           },
           "session_id": "uuid-scrubbed-0003",
           "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0047"
+          "uuid": "uuid-scrubbed-0046"
         },
         "meta": {
           "interruptArtifact": false,
@@ -1350,7 +1261,7 @@
           },
           "session_id": "uuid-scrubbed-0003",
           "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0048"
+          "uuid": "uuid-scrubbed-0047"
         },
         "meta": {
           "interruptArtifact": false,
@@ -1369,7 +1280,7 @@
           },
           "session_id": "uuid-scrubbed-0003",
           "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0049"
+          "uuid": "uuid-scrubbed-0048"
         },
         "meta": {
           "interruptArtifact": false,
@@ -1449,7 +1360,7 @@
           "request_sent_wall_ms": 0,
           "type": "result",
           "duration_ms": 0,
-          "uuid": "uuid-scrubbed-0050"
+          "uuid": "uuid-scrubbed-0049"
         },
         "meta": {
           "interruptArtifact": false,

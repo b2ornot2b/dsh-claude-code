@@ -36,6 +36,7 @@ import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { GenericCallView } from '@deepseek-ai/dsh-tools'
 import {
+  CC_CLOSE_REASONS,
   CC_PERMISSION_MODES,
   CC_SESSION_STATUSES,
 } from '@deepseek-ai/dsh-claude-code'
@@ -47,7 +48,7 @@ import type {} from '@deepseek-ai/dsh-jobs'
 
 import { startBackgroundSession } from './background.ts'
 import { abortedError, ClaudeCodeToolError, errorCode } from './errors.ts'
-import { openSession, requireSession } from './open.ts'
+import { noSuchSession, openSession, requireSession } from './open.ts'
 import { projectContextUsage, projectResult } from './result.ts'
 
 export const name = 'tool-claude-code'
@@ -319,6 +320,13 @@ export function apply(ctx: Context, _config: Config = {}): void {
         additionalProperties: false,
         properties: {
           status: { type: 'string', required: true, enum: CC_SESSION_STATUSES },
+          close_reason: {
+            type: 'string',
+            enum: CC_CLOSE_REASONS,
+            description: 'Why the session closed, present only when status is "closed": "closed" (something '
+              + 'asked — claude_code_close, teardown), "exited" (the Claude Code subprocess ended on its own '
+              + 'between turns) or "crashed" (it died mid-turn, so that turn produced no result).',
+          },
           pending_asks: { type: 'integer', required: true, description: 'Number of permission/question asks currently awaiting an answer.' },
           context_usage: {
             type: 'object',
@@ -332,19 +340,31 @@ export function apply(ctx: Context, _config: Config = {}): void {
       },
       render: (args, value) => [{
         type: 'text',
-        text: `session ${args.session_id}: ${value.status}, ${value.pending_asks} pending ask(s)`
+        text: `session ${args.session_id}: ${value.status}`
+          + (value.close_reason === undefined ? '' : ` (${value.close_reason})`)
+          + `, ${value.pending_asks} pending ask(s)`
           + (value.context_usage !== undefined ? `, ${value.context_usage.used_tokens} tokens used` : ''),
       } satisfies ContentBlock],
     },
     async execute(args) {
-      const session = requireSession(ctx, args.session_id)
-      const snapshot = session.snapshot()
+      // The ONE tool that answers for a session that is no longer live. Every
+      // other one needs something to drive and rightly fails `CC_NO_SESSION`;
+      // this one is the question a caller asks precisely BECAUSE the session
+      // stopped answering, and since a dead subprocess now closes its own
+      // session, "no such session" would be a lie about a session the caller
+      // was handed the id of moments earlier. The seam keeps a bounded
+      // tombstone for exactly this call (`CLOSED_SESSION_HISTORY`).
+      const session = ctx.claudeCode.session(args.session_id as CcSessionId)
+      const snapshot = session?.snapshot() ?? ctx.claudeCode.get(args.session_id as CcSessionId)
+      if (snapshot === undefined) throw noSuchSession(args.session_id)
       // Occupancy comes from the seam's own field when a future phase starts
       // reporting one, and otherwise from the last completed turn's usage —
       // the cheapest REAL source (see `projectContextUsage`). It stays ABSENT
-      // rather than guessed when nothing has been reported yet.
+      // rather than guessed when nothing has been reported yet. A tombstoned
+      // session has no actor left to read a last result off, so it reports
+      // whatever the final snapshot carried and nothing more.
       const contextUsage = snapshot.contextUsage === undefined
-        ? projectContextUsage(session.lastResult)
+        ? projectContextUsage(session?.lastResult)
         : {
             used_tokens: snapshot.contextUsage.usedTokens,
             ...(snapshot.contextUsage.maxTokens === undefined
@@ -353,6 +373,7 @@ export function apply(ctx: Context, _config: Config = {}): void {
           }
       return await Promise.resolve({
         status: snapshot.status,
+        ...(snapshot.closeReason === undefined ? {} : { close_reason: snapshot.closeReason }),
         pending_asks: snapshot.pendingAsks,
         ...(contextUsage === undefined ? {} : { context_usage: contextUsage }),
       })

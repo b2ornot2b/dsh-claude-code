@@ -353,3 +353,159 @@ keyless + with-key smoke split; upstreaming decision (PR into harness vs. publis
 3. **Scope trim** — if the near-term need is only "DeepSeek agent delegates coding tasks to
    Claude", enabling the existing `subagent-claude-code` row (or `subagent-acp` +
    `claude-code-acp`) is a zero-code interim while Phases 0–4 land.
+
+---
+
+## 8. Project completion status
+
+**All eight phases are complete.** Written at the Phase 7 Stage 3 (final verification) merge
+point. This section is the project's closing record: what each phase actually produced, the
+final gate numbers, the gaps that are genuinely open, and every place the shipped system
+deviates from `docs/dsh-claude-code-integration.md` — with the reason.
+
+The living API reference is `docs/phase1-api-contract.md`; it is the source of truth for the
+export surface and carries the numbered corrections (1–55) each phase made. This section does
+not restate it.
+
+### 8.1 Per-phase outcomes
+
+| Phase | Delivered | Outcome |
+|---|---|---|
+| **0 — Spikes** | seven probe scripts under `spikes/`, each a real SDK or dsh run | All seven confirmed. Spike 7 (out-of-tree composition) was the go/no-go gate and **passed**: `cordis@4.0.1` + `dsh-*@0.1.0-rc.7` install clean, boot both ways, type-check with `skipLibCheck: false`. Four spikes changed the design (see §8.4). |
+| **1 — Scaffold** | three packages, `ctx.claudeCode` service shell, config schema, the frozen tool schemas, `tests/composition/` | Real-composition acceptance test booting a `cordis.yml` through the Loader against **built** `lib/`, plus the `'default' in mod === false` guard (post-mortem 0001). The API contract doc was written here and became the project's reference. |
+| **2 — Session actor** | `CcSession`: never-completing input stream, uuid-stamped sends, `open`/`send`/`interrupt`/`waitForResult`/`close`, prewarm pool, credential-scrubbed env | Live suite established (real subprocesses, session-scoped `pgrep` orphan checks). Two live-suite defects fixed at the merge point, both in tests: a whole-machine process count that read neighbours as orphans, and a "codeword" recall probe Haiku declined on safety grounds. |
+| **3 — Mirror** | `CcMirror`: SDK messages → dsh session events, turn/step framing, streaming text + reasoning chunks, tool call/result correlation, compaction marker | Golden-transcript tests over scrubbed fixtures recorded from real runs. Default-ignore branch for the ~38-variant `SDKMessage` union (S5), so an SDK upgrade cannot crash the mirror. |
+| **4 — Ask channel** | `CcAskRouter`: `canUseTool` → `ctx.approval`, `AskUserQuestion` → `ctx.userQuestions`, `ExitPlanMode` → plan review; `requestId`-keyed idempotent ask table; full fallback policy; the rule cache | The phase that spent the most real time. Every live ask spec drives the production router (no `deps.canUseTool` override) and asserts on the deterministic `tool_result` text CC's own permission machinery writes back — never on the model's paraphrase. |
+| **5 — Tools** | the six `claude_code_*` tools; sync and background modes; background = a real `ctx.jobs` job | The job **is** the session, not just its first turn: `job_kill` closes it, `job_output` streams each turn, owner disposal closes it. Composition tested both with and without the jobs runtime loaded. |
+| **6 — Agent adapter** | `ClaudeCodeAgent` implementing dsh's `Agent` verbatim; shared UUID identity across seam/session/agent; `ctx.claudeCodeAgents` | HMR-safe (dispose fiber → subprocess dead, asks settled), exact-disposer yield (D6), inert-waterfall documentation with substitutes. Left ONE carry-forward: a dead subprocess did not settle anything. |
+| **7 — Hardening** | Stage 1: the dead-subprocess lifecycle fix, the card projections, three fixture-scrubber defects. Stage 2: the §12 failure-injection suite (live) and `examples/delegation-demo/`. Stage 3: adversarial review, consistency audit, clean-state gates, two live sweeps, this document and the root `README.md`. | Closed the Phase 6 carry-forward at the seam, where it belonged: pump completion routes through the **same** `close()` an explicit close uses, tagged `closed`/`exited`/`crashed`, so every consumer effect follows for free. Stage 3 found and fixed two further defects (§8.3). |
+
+### 8.2 Final gate numbers
+
+Measured from a **true clean state** (`node_modules`, `packages/*/node_modules`,
+`packages/*/lib` and every `*.tsbuildinfo` removed, then `pnpm install --frozen-lockfile`):
+
+| Gate | Result |
+|---|---|
+| `pnpm install --frozen-lockfile` | clean, zero peer warnings |
+| `pnpm run typecheck` | clean — three packages + `tsconfig.tests.json`, NodeNext / strict / `exactOptionalPropertyTypes` / `noUncheckedIndexedAccess` / **`skipLibCheck: false`** |
+| `pnpm run build` | clean |
+| `pnpm test` (offline) | **502 passed / 44 skipped, 32 files** (+30 collected-and-skipped live files). Run twice, byte-identical results — the goldens are deterministic. No subprocess, no network. |
+| `pnpm run test:live` | **44 passed / 30 files**, run TWICE back to back (77 s and 67 s wall), zero failures across both. `claude-haiku-4-5-20251001`, claude.ai subscription, no `ANTHROPIC_API_KEY`. Zero orphan subprocesses before, between and after. The two-run count was **restarted from zero** for each flake found rather than re-rolled (§8.3). |
+| `node examples/delegation-demo/run.mjs` | exit `0`; 40-event mirrored timeline (`turn/start` → two steps with a `tool/call`+`tool/result` → `turn/end`); the created file's content matched byte for byte. A forced failure exits `1` through the script's own handler. |
+| SDK containment | asserted on built artifacts: no `@anthropic-ai/claude-agent-sdk` in any type position across all three packages' `lib/types/**/*.d.ts` |
+| No default exports | asserted per package by `exports.spec.ts` (`'default' in mod === false`) |
+| Pins | exact everywhere that matters: SDK `0.3.233`, `dsh-*` `0.1.0-rc.7`, `cordis` `4.0.1` (peer) |
+
+The 44 skipped offline tests are the live-gated specs, collected and skipped — they are the
+same 44 that run under `pnpm run test:live`.
+
+### 8.3 Defects found by verification (not by feature work)
+
+Recorded because each was found by a review pass rather than by writing the feature, and each
+would have shipped otherwise:
+
+- **Phase 7 Stage 1** — the fixture scrubber's permissive `msg_[A-Za-z0-9_-]+` pattern was
+  matching `msg_lifecycle_v1`, a `system/init` CAPABILITY name, and rewriting it in all three
+  committed fixtures. The scrubber was destroying the exact deterministic value this seam
+  feature-detects on (S14).
+- **Phase 7 Stage 3** — `CcSession.close()` was re-entrant. `#closing` is assigned only after
+  `runClose()`'s synchronous prefix, which includes the `onClose` listener loop, so a listener
+  that closed the session from inside its own notification started a second close sequence over
+  a half-torn-down session and re-notified itself — unbounded, because `#closeListeners` is
+  cleared *after* the loop. Fixed with a `#closed` guard; pinned by two regression tests that
+  fail (rather than crash the worker) if it regresses. No shipped listener does this today; the
+  API is public and `close()` is the obvious thing to call from one.
+- **Phase 7 Stage 3** — `pnpm-lock.yaml` was stale. Stage 1 added `@deepseek-ai/dsh-tools` to
+  `packages/claude-code/package.json` (the card view types) without regenerating the lockfile,
+  so `pnpm install --frozen-lockfile` — the CI default — failed outright on a fresh clone. Only
+  a clean-state gate could have caught it; an incremental `pnpm install` never does.
+- **Phase 7 Stage 3** — three live specs flaked across the verification sweeps, all fixed in the
+  tests, none a defect in `src/`. Two were the same mistake: *waiting on a proxy for the thing
+  the assertion is about.* (i) `failures.live.spec.ts` waited for `pendingAsks > 0` and then
+  asserted the answerer had been called — but the router books the ask *before* awaiting
+  `ctx.approval.request()`; the barrier now waits on the answerer itself. (ii)
+  `prewarm.live.spec.ts`'s long-standing "contention flake" was **misdiagnosed**: every test
+  gets its own pool, so no neighbour can steal its warm slot. The real cause was a flat 2 s
+  sleep standing in for a real subprocess spawn + handshake (~300 ms in isolation, unbounded
+  under a thirty-file sweep); the spy now reports when `startup()` *settles* and the spec waits
+  on that. (iii) `ask-plan.live.spec.ts` saw Haiku answer a plan prompt in prose without ever
+  calling `ExitPlanMode` — model nondeterminism under load, so its *setup* became a bounded
+  re-prompt while every assertion stayed exactly where it was.
+
+### 8.4 Deviations from the original spec, with rationale
+
+Every one is verified — by SDK source, by dsh source, or by a live probe. The reference tags
+point at §2 (deltas) and §5a (spike results) above.
+
+| Spec said | Shipped instead | Why |
+|---|---|---|
+| §8.2: let CC mint the id on a fork, map it back to dsh | **dsh mints, always.** `resume + forkSession + sessionId: <our uuid>` is honored, and history carries over | Spike 1. No id mapping exists anywhere in the codebase as a result — one identity, three systems |
+| §4.4: correlate `tool_use` heuristically (deep-equal on inputs) when no `requestId` | deleted; `toolUseID` for `callId`, `requestId` as the idempotency key | S2 — the third `canUseTool` argument carries **both**, plus pre-rendered prompt text |
+| §3.1: `inject()` buffers, then prepends to the next outbound message | `SDKUserMessage.shouldQuery: false` | S7 — a native mechanism with exactly dsh `inject()`'s contract. Nothing is buffered |
+| §10: `settingSources` "loads nothing by default" | `[]` passed **explicitly**, and it is load-bearing | S1 — omitting it loads ALL sources, i.e. the user's real settings and CLAUDE.md, into an embedded agent |
+| §4.1/§10: `persistAlwaysAllow` echoes `updatedPermissions` and the SDK writes the rule | an **integration-owned** JSON rule cache, consulted inside `canUseTool` | Spike 4 — a headless `canUseTool` never writes `settings.local.json`, with `settingSources: []` **or** `['local']`. The disk write is the interactive TUI's job |
+| §5.4: `cancel_queued` drives the CLI's advertised capability | emulated at our layer (re-interrupt as surviving turns start, capped) | Spike 3 — the CLI advertises `interrupt_cancel_queued_v1`, but SDK 0.3.233 exposes no way to drive it. Tracked for adoption |
+| `steer()` is cheap, token-level steering | `priority: 'now'` = **abort-and-refold**, and it is documented as expensive | Spike 2 — turn 1 is killed and ONE fresh turn runs both instructions. Turn-1 tokens are re-paid |
+| §5.3: a 7-kind mirror table | 13 dsh event types, and a **default-ignore branch** for the SDK side | S5 — `SDKMessage` is a ~38-variant union. Same rule as dsh's own "never `assertNever` on SessionEvent" |
+| §7: `AgentOptions.setModel()` | package-level `setModel()` → `query.setModel()`; `AgentOptions` is read-only | D7 — dsh's model switching is `installModelSelection()` + the `agent/request` waterfall, which never fires for a CC-backed agent |
+| §2: "tool-bash is a three-package split" | the trio is **Definition / Provider / Consumer**; `dsh-claude-code` is definition *and* provider | D11 — `tool-bash` is one package; the three is the capability seam doctrine. There is no `@deepseek-ai/dsh-core` |
+| §6: `exec.agent.inject(...)` reports background progress | no progress channel; the background session **is** a dsh job | D10 — `dsh-tool-jobs` already delivers the completion notice to the owning agent, bounded per owner. A second path would double every message |
+| §4.3: wire `ctx.planMode.set()` for CC sessions | not wired; CC owns its plan state, and the plan review copies `dsh-plan-mode`'s `plan-review` conventions verbatim | D5 — `ctx.planMode`'s queued-flip semantics assume the dsh loop |
+| §6: mirror CC's own tool calls into dsh cards | the projections ship (`presentCcToolCall` / `presentCcToolResult`, pure and tested); **no payload is written to the log** | Structurally not representable in rc.7 — see §8.5. Every input the card needs is already durable in the log, so it stays a pure function of the record |
+| §12: version-gate behaviour on CLI version | feature-detect on the init message's `capabilities`, never version-sniff | S14 — no CHANGELOG ships in the npm package, and the capability list is authoritative |
+
+Two deviations of process rather than design: development happened **out-of-tree** in this repo
+(§1.2, gated on spike 7) rather than inside the harness checkout, which cost the monorepo's free
+gates and bought iteration speed; and the SDK pin is **0.3.233** rather than the harness's
+0.3.220, with capability feature-detection making the difference safe.
+
+### 8.5 Open gaps — what is genuinely not done
+
+Each is blocked upstream, on the SDK or on dsh rc.7. The root `README.md` carries the same list
+as a table with the specific upstream change that closes each one.
+
+1. **Cards for Claude Code's own tools cannot reach a dsh UI.** The projections are implemented,
+   pure, total and fixture-tested in `packages/claude-code/src/cards.ts` — but `tool/call` has no
+   view slot, and a card is *derived* by a tool-registry **name** lookup, which misses because
+   CC's names are CapCase (`Bash`) and dsh's are lowercase (`bash`). Nothing is written to the
+   log, deliberately: a payload in `tool/result.meta` would be read by nobody and duplicate
+   content the event already carries. Closed upstream by a `presentation-only` registration on
+   `ToolRegistry` or a name-independent view path in `viewFor()`. The module's docblock carries
+   the full evidence trail with file:line references.
+2. **`claude-code/compact` cannot be marked `ignorable` on a live append.** `Session.append()`
+   builds and deep-freezes the envelope itself, so a log holding a live-appended compaction
+   boundary is refused by a stock harness build that does not know the type. Two mitigations
+   ship (`mirror: { compaction: 'skip' }`, and `markEventIgnorable()` at the seed/restore
+   boundary, where envelopes *are* caller-supplied). Closed by
+   `append(type, data, { ignorable: true })` upstream.
+3. **`cancel_queued` is emulated.** See §8.4. Closed when the SDK exposes the call.
+4. **A human cannot grant an always-allow rule.** dsh's approval outcome vocabulary is
+   `allowed-once | rejected | cancelled | unavailable` with no `'always'`, and the questions seam
+   is not a permission channel. Rules come from `ask.rules` configuration or `CcAskRules.add()`.
+   When dsh grows the outcome, the UI path is one `add()` call away and nothing else changes.
+5. **The agent-card / UI surface for a CC-backed agent.** Downstream of (1): the same registry
+   name lookup governs it. Untouched by this project.
+6. **Nothing remains open on the dead-subprocess path.** It is listed here only to say so
+   explicitly: `status`, `closeReason`, pending asks, parked waiters, the mirror's dangling turn,
+   the service registry, the tombstone, the background job's outcome and the agent's `idle`
+   transition are each asserted offline (`session-death.spec.ts`) **and** live against a real
+   `SIGKILL` (`failures.live.spec.ts`, `agent-kill.live.spec.ts`,
+   `tools-background-kill.live.spec.ts`).
+
+Two non-gaps worth stating so nobody re-opens them as bugs: **replay, seed-fork and
+`deriveMessages()` are invalid for a CC-backed session** — the dsh log is a mirror, Claude Code
+owns its transcript, and there is no plan to make them valid. And **the loop-only waterfalls
+(`agent/pre-step`, `agent/request`, `agent/request-error`, `tools/pre-execute`,
+`agent/turn-stopping`) are permanently inert** for a CC-backed agent; they are exported as
+`INERT_DSH_MECHANISMS` with documented substitutes, because a plugin author's alternative is
+discovering it at runtime.
+
+### 8.6 Recommended next step
+
+Upstream into the harness monorepo. The move is mechanical (see the root `README.md`'s
+"Upstreaming path"): three directory moves, `workspace:^` for every `0.1.0-rc.7` pin, and drop
+`private: true`. The remaining work is the monorepo's own gates — per-file 100 % coverage on
+`src`, doc-sync, and an assembled snapshot scenario for the model-visible tool surface — none of
+which requires a code change here. Landing it in-tree is also what unblocks gaps 1, 2 and 4
+above, since all three are one-file changes to packages that would then be siblings.

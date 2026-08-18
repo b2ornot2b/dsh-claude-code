@@ -93,92 +93,27 @@
           "model": "claude-haiku-4-5-20251001",
           "permissionMode": "default",
           "slash_commands": [
-            "deep-research",
-            "design-sync",
-            "dataviz",
-            "update-config",
-            "verify",
-            "debug",
-            "code-review",
-            "simplify",
-            "batch",
-            "fewer-permission-prompts",
-            "doctor",
-            "loop",
-            "schedule",
-            "claude-api",
-            "run",
-            "run-skill-generator",
-            "agents",
-            "auto-mode-setup",
-            "autocompact",
-            "clear",
-            "color",
-            "compact",
-            "config",
-            "context",
-            "effort",
-            "fast",
-            "heapdump",
-            "init",
-            "mcp",
-            "import",
-            "model",
-            "__remote-workflow",
-            "workflow-launch-exec",
-            "reload-skills",
-            "rename",
-            "ultrareview",
-            "security-review",
-            "usage-credits",
-            "extra-usage",
-            "usage",
-            "insights",
-            "recap",
-            "goal",
-            "design",
-            "design-consent",
-            "design-revoke",
-            "list-agents",
-            "team-onboarding"
+            "scrubbed-machine-local-list"
           ],
           "terminal_slash_commands": [
-            "doctor",
-            "color"
+            "scrubbed-machine-local-list"
           ],
           "apiKeySource": "none",
           "claude_code_version": "2.1.233",
           "output_style": "default",
           "agents": [
-            "claude",
-            "Explore",
-            "general-purpose",
-            "Plan",
-            "statusline-setup"
+            "scrubbed-machine-local-list"
           ],
           "skills": [
-            "deep-research",
-            "design-sync",
-            "dataviz",
-            "update-config",
-            "verify",
-            "debug",
-            "code-review",
-            "simplify",
-            "batch",
-            "fewer-permission-prompts",
-            "doctor",
-            "loop",
-            "schedule",
-            "claude-api",
-            "run",
-            "run-skill-generator"
+            "scrubbed-machine-local-list"
           ],
-          "plugins": [],
+          "plugins": [
+            "scrubbed-machine-local-list"
+          ],
           "capabilities": [
             "interrupt_receipt_v1",
             "interrupt_cancel_queued_v1",
-            "msg-scrubbed-0001"
+            "msg_lifecycle_v1"
           ],
           "analytics_disabled": false,
           "product_feedback_disabled": false,
@@ -223,7 +158,7 @@
             "type": "message_start",
             "message": {
               "model": "claude-haiku-4-5-20251001",
-              "id": "msg-scrubbed-0002",
+              "id": "msg-scrubbed-0001",
               "type": "message",
               "role": "assistant",
               "content": [],
@@ -425,7 +360,7 @@
           "mcp_servers": [
             {
               "name": "claude.ai Atlassian Rovo",
-              "status": "pending"
+              "status": "needs-auth"
             },
             {
               "name": "claude.ai Zeno Grafana Dashboards",
@@ -441,11 +376,11 @@
             },
             {
               "name": "claude.ai Three.js 3D Viewer",
-              "status": "pending"
+              "status": "needs-auth"
             },
             {
               "name": "claude.ai Postman",
-              "status": "pending"
+              "status": "needs-auth"
             },
             {
               "name": "claude.ai Context7",
@@ -453,7 +388,7 @@
             },
             {
               "name": "claude.ai Netlify",
-              "status": "pending"
+              "status": "needs-auth"
             },
             {
               "name": "claude.ai Mermaid Chart",
@@ -473,7 +408,7 @@
             },
             {
               "name": "claude.ai Google Calendar",
-              "status": "pending"
+              "status": "needs-auth"
             },
             {
               "name": "claude.ai Google Drive",
@@ -483,92 +418,27 @@
           "model": "claude-haiku-4-5-20251001",
           "permissionMode": "default",
           "slash_commands": [
-            "deep-research",
-            "design-sync",
-            "dataviz",
-            "update-config",
-            "verify",
-            "debug",
-            "code-review",
-            "simplify",
-            "batch",
-            "fewer-permission-prompts",
-            "doctor",
-            "loop",
-            "schedule",
-            "claude-api",
-            "run",
-            "run-skill-generator",
-            "agents",
-            "auto-mode-setup",
-            "autocompact",
-            "clear",
-            "color",
-            "compact",
-            "config",
-            "context",
-            "effort",
-            "fast",
-            "heapdump",
-            "init",
-            "mcp",
-            "import",
-            "model",
-            "__remote-workflow",
-            "workflow-launch-exec",
-            "reload-skills",
-            "rename",
-            "ultrareview",
-            "security-review",
-            "usage-credits",
-            "extra-usage",
-            "usage",
-            "insights",
-            "recap",
-            "goal",
-            "design",
-            "design-consent",
-            "design-revoke",
-            "list-agents",
-            "team-onboarding"
+            "scrubbed-machine-local-list"
           ],
           "terminal_slash_commands": [
-            "doctor",
-            "color"
+            "scrubbed-machine-local-list"
           ],
           "apiKeySource": "none",
           "claude_code_version": "2.1.233",
           "output_style": "default",
           "agents": [
-            "claude",
-            "Explore",
-            "general-purpose",
-            "Plan",
-            "statusline-setup"
+            "scrubbed-machine-local-list"
           ],
           "skills": [
-            "deep-research",
-            "design-sync",
-            "dataviz",
-            "update-config",
-            "verify",
-            "debug",
-            "code-review",
-            "simplify",
-            "batch",
-            "fewer-permission-prompts",
-            "doctor",
-            "loop",
-            "schedule",
-            "claude-api",
-            "run",
-            "run-skill-generator"
+            "scrubbed-machine-local-list"
           ],
-          "plugins": [],
+          "plugins": [
+            "scrubbed-machine-local-list"
+          ],
           "capabilities": [
             "interrupt_receipt_v1",
             "interrupt_cancel_queued_v1",
-            "msg-scrubbed-0001"
+            "msg_lifecycle_v1"
           ],
           "analytics_disabled": false,
           "product_feedback_disabled": false,
@@ -614,7 +484,7 @@
             "resetsAt": 0,
             "rateLimitType": "five_hour",
             "overageStatus": "rejected",
-            "overageDisabledReason": "out_of_credits",
+            "overageDisabledReason": "org_level_disabled",
             "isUsingOverage": false
           },
           "uuid": "uuid-scrubbed-0015",
@@ -636,7 +506,7 @@
             "type": "message_start",
             "message": {
               "model": "claude-haiku-4-5-20251001",
-              "id": "msg-scrubbed-0003",
+              "id": "msg-scrubbed-0002",
               "type": "message",
               "role": "assistant",
               "content": [],
@@ -681,7 +551,7 @@
             "content_block": {
               "type": "thinking",
               "thinking": "",
-              "signature": ""
+              "signature": "scrubbed-signature"
             }
           },
           "session_id": "uuid-scrubbed-0003",
@@ -701,8 +571,8 @@
         "message": {
           "type": "system",
           "subtype": "thinking_tokens",
-          "estimated_tokens": 1,
-          "estimated_tokens_delta": 1,
+          "estimated_tokens": 0,
+          "estimated_tokens_delta": 0,
           "uuid": "uuid-scrubbed-0018",
           "session_id": "uuid-scrubbed-0003"
         },
@@ -723,7 +593,7 @@
             "index": 0,
             "delta": {
               "type": "thinking_delta",
-              "thinking": "The",
+              "thinking": "The user is asking",
               "estimated_tokens": null
             }
           },
@@ -744,8 +614,8 @@
         "message": {
           "type": "system",
           "subtype": "thinking_tokens",
-          "estimated_tokens": 6,
-          "estimated_tokens_delta": 5,
+          "estimated_tokens": 0,
+          "estimated_tokens_delta": 0,
           "uuid": "uuid-scrubbed-0020",
           "session_id": "uuid-scrubbed-0003"
         },
@@ -766,7 +636,7 @@
             "index": 0,
             "delta": {
               "type": "thinking_delta",
-              "thinking": " user is asking me",
+              "thinking": " me to count from 1 to 30, one number per line, then say DONE, and also say BANANA at the end.\n\nThis is a straightforward request. I'll",
               "estimated_tokens": null
             }
           },
@@ -787,8 +657,8 @@
         "message": {
           "type": "system",
           "subtype": "thinking_tokens",
-          "estimated_tokens": 10,
-          "estimated_tokens_delta": 4,
+          "estimated_tokens": 0,
+          "estimated_tokens_delta": 0,
           "uuid": "uuid-scrubbed-0022",
           "session_id": "uuid-scrubbed-0003"
         },
@@ -809,7 +679,7 @@
             "index": 0,
             "delta": {
               "type": "thinking_delta",
-              "thinking": " to count from ",
+              "thinking": " simply output the numbers 1-30, each on a new line, then say DONE, and then say BANANA.",
               "estimated_tokens": null
             }
           },
@@ -828,37 +698,19 @@
       "kind": "message",
       "envelope": {
         "message": {
-          "type": "system",
-          "subtype": "thinking_tokens",
-          "estimated_tokens": 12,
-          "estimated_tokens_delta": 2,
-          "uuid": "uuid-scrubbed-0024",
-          "session_id": "uuid-scrubbed-0003"
-        },
-        "meta": {
-          "interruptArtifact": false,
-          "interruptedTurn": false,
-          "reinit": false
-        }
-      }
-    },
-    {
-      "kind": "message",
-      "envelope": {
-        "message": {
           "type": "stream_event",
           "event": {
             "type": "content_block_delta",
             "index": 0,
             "delta": {
               "type": "thinking_delta",
-              "thinking": "1 to ",
+              "thinking": "",
               "estimated_tokens": null
             }
           },
           "session_id": "uuid-scrubbed-0003",
           "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0025"
+          "uuid": "uuid-scrubbed-0024"
         },
         "meta": {
           "interruptArtifact": false,
@@ -873,310 +725,9 @@
         "message": {
           "type": "system",
           "subtype": "thinking_tokens",
-          "estimated_tokens": 16,
-          "estimated_tokens_delta": 4,
-          "uuid": "uuid-scrubbed-0026",
-          "session_id": "uuid-scrubbed-0003"
-        },
-        "meta": {
-          "interruptArtifact": false,
-          "interruptedTurn": false,
-          "reinit": false
-        }
-      }
-    },
-    {
-      "kind": "message",
-      "envelope": {
-        "message": {
-          "type": "stream_event",
-          "event": {
-            "type": "content_block_delta",
-            "index": 0,
-            "delta": {
-              "type": "thinking_delta",
-              "thinking": "30, one number",
-              "estimated_tokens": null
-            }
-          },
-          "session_id": "uuid-scrubbed-0003",
-          "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0027"
-        },
-        "meta": {
-          "interruptArtifact": false,
-          "interruptedTurn": false,
-          "reinit": false
-        }
-      }
-    },
-    {
-      "kind": "message",
-      "envelope": {
-        "message": {
-          "type": "system",
-          "subtype": "thinking_tokens",
-          "estimated_tokens": 20,
-          "estimated_tokens_delta": 4,
-          "uuid": "uuid-scrubbed-0028",
-          "session_id": "uuid-scrubbed-0003"
-        },
-        "meta": {
-          "interruptArtifact": false,
-          "interruptedTurn": false,
-          "reinit": false
-        }
-      }
-    },
-    {
-      "kind": "message",
-      "envelope": {
-        "message": {
-          "type": "stream_event",
-          "event": {
-            "type": "content_block_delta",
-            "index": 0,
-            "delta": {
-              "type": "thinking_delta",
-              "thinking": " per line, then",
-              "estimated_tokens": null
-            }
-          },
-          "session_id": "uuid-scrubbed-0003",
-          "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0029"
-        },
-        "meta": {
-          "interruptArtifact": false,
-          "interruptedTurn": false,
-          "reinit": false
-        }
-      }
-    },
-    {
-      "kind": "message",
-      "envelope": {
-        "message": {
-          "type": "system",
-          "subtype": "thinking_tokens",
-          "estimated_tokens": 21,
-          "estimated_tokens_delta": 1,
-          "uuid": "uuid-scrubbed-0030",
-          "session_id": "uuid-scrubbed-0003"
-        },
-        "meta": {
-          "interruptArtifact": false,
-          "interruptedTurn": false,
-          "reinit": false
-        }
-      }
-    },
-    {
-      "kind": "message",
-      "envelope": {
-        "message": {
-          "type": "stream_event",
-          "event": {
-            "type": "content_block_delta",
-            "index": 0,
-            "delta": {
-              "type": "thinking_delta",
-              "thinking": " say",
-              "estimated_tokens": null
-            }
-          },
-          "session_id": "uuid-scrubbed-0003",
-          "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0031"
-        },
-        "meta": {
-          "interruptArtifact": false,
-          "interruptedTurn": false,
-          "reinit": false
-        }
-      }
-    },
-    {
-      "kind": "message",
-      "envelope": {
-        "message": {
-          "type": "system",
-          "subtype": "thinking_tokens",
-          "estimated_tokens": 45,
-          "estimated_tokens_delta": 24,
-          "uuid": "uuid-scrubbed-0032",
-          "session_id": "uuid-scrubbed-0003"
-        },
-        "meta": {
-          "interruptArtifact": false,
-          "interruptedTurn": false,
-          "reinit": false
-        }
-      }
-    },
-    {
-      "kind": "message",
-      "envelope": {
-        "message": {
-          "type": "stream_event",
-          "event": {
-            "type": "content_block_delta",
-            "index": 0,
-            "delta": {
-              "type": "thinking_delta",
-              "thinking": " DONE, and also say BANANA at the end.\n\nThis is a straightforward request. I should just output",
-              "estimated_tokens": null
-            }
-          },
-          "session_id": "uuid-scrubbed-0003",
-          "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0033"
-        },
-        "meta": {
-          "interruptArtifact": false,
-          "interruptedTurn": false,
-          "reinit": false
-        }
-      }
-    },
-    {
-      "kind": "message",
-      "envelope": {
-        "message": {
-          "type": "system",
-          "subtype": "thinking_tokens",
-          "estimated_tokens": 67,
-          "estimated_tokens_delta": 22,
-          "uuid": "uuid-scrubbed-0034",
-          "session_id": "uuid-scrubbed-0003"
-        },
-        "meta": {
-          "interruptArtifact": false,
-          "interruptedTurn": false,
-          "reinit": false
-        }
-      }
-    },
-    {
-      "kind": "message",
-      "envelope": {
-        "message": {
-          "type": "stream_event",
-          "event": {
-            "type": "content_block_delta",
-            "index": 0,
-            "delta": {
-              "type": "thinking_delta",
-              "thinking": " the numbers 1-30, each on its own line, then say DONE, and then say BANANA.\n\nLet me do",
-              "estimated_tokens": null
-            }
-          },
-          "session_id": "uuid-scrubbed-0003",
-          "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0035"
-        },
-        "meta": {
-          "interruptArtifact": false,
-          "interruptedTurn": false,
-          "reinit": false
-        }
-      }
-    },
-    {
-      "kind": "message",
-      "envelope": {
-        "message": {
-          "type": "system",
-          "subtype": "thinking_tokens",
-          "estimated_tokens": 83,
-          "estimated_tokens_delta": 16,
-          "uuid": "uuid-scrubbed-0036",
-          "session_id": "uuid-scrubbed-0003"
-        },
-        "meta": {
-          "interruptArtifact": false,
-          "interruptedTurn": false,
-          "reinit": false
-        }
-      }
-    },
-    {
-      "kind": "message",
-      "envelope": {
-        "message": {
-          "type": "stream_event",
-          "event": {
-            "type": "content_block_delta",
-            "index": 0,
-            "delta": {
-              "type": "thinking_delta",
-              "thinking": " this:\n\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22",
-              "estimated_tokens": null
-            }
-          },
-          "session_id": "uuid-scrubbed-0003",
-          "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0037"
-        },
-        "meta": {
-          "interruptArtifact": false,
-          "interruptedTurn": false,
-          "reinit": false
-        }
-      }
-    },
-    {
-      "kind": "message",
-      "envelope": {
-        "message": {
-          "type": "system",
-          "subtype": "thinking_tokens",
-          "estimated_tokens": 93,
-          "estimated_tokens_delta": 10,
-          "uuid": "uuid-scrubbed-0038",
-          "session_id": "uuid-scrubbed-0003"
-        },
-        "meta": {
-          "interruptArtifact": false,
-          "interruptedTurn": false,
-          "reinit": false
-        }
-      }
-    },
-    {
-      "kind": "message",
-      "envelope": {
-        "message": {
-          "type": "stream_event",
-          "event": {
-            "type": "content_block_delta",
-            "index": 0,
-            "delta": {
-              "type": "thinking_delta",
-              "thinking": "\n23\n24\n25\n26\n27\n28\n29\n30\n\nDONE\n\nBANANA",
-              "estimated_tokens": null
-            }
-          },
-          "session_id": "uuid-scrubbed-0003",
-          "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0039"
-        },
-        "meta": {
-          "interruptArtifact": false,
-          "interruptedTurn": false,
-          "reinit": false
-        }
-      }
-    },
-    {
-      "kind": "message",
-      "envelope": {
-        "message": {
-          "type": "system",
-          "subtype": "thinking_tokens",
-          "estimated_tokens": 159,
-          "estimated_tokens_delta": 66,
-          "uuid": "uuid-scrubbed-0040",
+          "estimated_tokens": 0,
+          "estimated_tokens_delta": 0,
+          "uuid": "uuid-scrubbed-0025",
           "session_id": "uuid-scrubbed-0003"
         },
         "meta": {
@@ -1196,12 +747,12 @@
             "index": 0,
             "delta": {
               "type": "signature_delta",
-              "signature": "EvIECqgBCBAYAipA0zFYuB0iEL4Yev7FTnGUuvcOq02qXCIoLCputGhNmwvVfxySt/yt5H6CfJf/Ogx3290mA4UqCUCKDvLSkQbxZjIZY2xhdWRlLWhhaWt1LTQtNS0yMDI1MTAwMTgAQgh0aGlua2luZ1okYzM0MWE5YTYtOWY3Yi00OTEyLWIyNDEtYjExODhiNjBhMWRlchCAh6VC6syYqG9oxmFJxDd3iAEBEgyYueHyvYQl9X7TWWEaDGQmydHknia43KrujCIwkUwMmPMRB0qR1bWAGpNWBiimSFVptH3Q2+6I7hOouz115b3RIn7FEzlicpBvOhiwKvYCpkYYoTD/t6eTR5AaAokMNMMMa2f5oOKOKCW6GtFxpzfhw1oT+Q+Qiseh887Va45E+fA9kYpm+0JZC7lvzTEBRBLKEktlBFm5HnsrQVUcIDCLEuz2OLVBwZEyRY8Ij9ToJ0K9kC7yItGM9L78v+78FVzps6VCK9f2W7iSr/Mgfs4Waropku/gyxBH4GrN/E0oNBWs1a5MDXEfSiYERkPwWJ2TMcLoflzfIHHwD/cM3xwL4WZ5nAvMJkhCHaFwjv/ueG36Sp0OhF4VV5lz0lMyHFceP7pdBlUiVhg7ia4jZiU9JKsgteXqSJdbUb0tblEUR0HiD7x9e3YC2L8yE38SCSPgz3dsaZ7t5w3fMQ02h4wNVQSthJV2qwElbOKa4uD6+VEtK6RYv+y4vcrFvaT45vNBniiOvNhzVTq2S28Xhkb5u9V/PBJYpa8EwYMYDAg6GK8FNBm0e4AUZOFc+FvcRelmoja/dqJk01bHgmLK6N+XeTDR5OAYAQ=="
+              "signature": "scrubbed-signature"
             }
           },
           "session_id": "uuid-scrubbed-0003",
           "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0041"
+          "uuid": "uuid-scrubbed-0026"
         },
         "meta": {
           "interruptArtifact": false,
@@ -1217,14 +768,14 @@
           "type": "assistant",
           "message": {
             "model": "claude-haiku-4-5-20251001",
-            "id": "msg-scrubbed-0003",
+            "id": "msg-scrubbed-0002",
             "type": "message",
             "role": "assistant",
             "content": [
               {
                 "type": "thinking",
-                "thinking": "The user is asking me to count from 1 to 30, one number per line, then say DONE, and also say BANANA at the end.\n\nThis is a straightforward request. I should just output the numbers 1-30, each on its own line, then say DONE, and then say BANANA.\n\nLet me do this:\n\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n\nDONE\n\nBANANA",
-                "signature": "EvIECqgBCBAYAipA0zFYuB0iEL4Yev7FTnGUuvcOq02qXCIoLCputGhNmwvVfxySt/yt5H6CfJf/Ogx3290mA4UqCUCKDvLSkQbxZjIZY2xhdWRlLWhhaWt1LTQtNS0yMDI1MTAwMTgAQgh0aGlua2luZ1okYzM0MWE5YTYtOWY3Yi00OTEyLWIyNDEtYjExODhiNjBhMWRlchCAh6VC6syYqG9oxmFJxDd3iAEBEgyYueHyvYQl9X7TWWEaDGQmydHknia43KrujCIwkUwMmPMRB0qR1bWAGpNWBiimSFVptH3Q2+6I7hOouz115b3RIn7FEzlicpBvOhiwKvYCpkYYoTD/t6eTR5AaAokMNMMMa2f5oOKOKCW6GtFxpzfhw1oT+Q+Qiseh887Va45E+fA9kYpm+0JZC7lvzTEBRBLKEktlBFm5HnsrQVUcIDCLEuz2OLVBwZEyRY8Ij9ToJ0K9kC7yItGM9L78v+78FVzps6VCK9f2W7iSr/Mgfs4Waropku/gyxBH4GrN/E0oNBWs1a5MDXEfSiYERkPwWJ2TMcLoflzfIHHwD/cM3xwL4WZ5nAvMJkhCHaFwjv/ueG36Sp0OhF4VV5lz0lMyHFceP7pdBlUiVhg7ia4jZiU9JKsgteXqSJdbUb0tblEUR0HiD7x9e3YC2L8yE38SCSPgz3dsaZ7t5w3fMQ02h4wNVQSthJV2qwElbOKa4uD6+VEtK6RYv+y4vcrFvaT45vNBniiOvNhzVTq2S28Xhkb5u9V/PBJYpa8EwYMYDAg6GK8FNBm0e4AUZOFc+FvcRelmoja/dqJk01bHgmLK6N+XeTDR5OAYAQ=="
+                "thinking": "The user is asking me to count from 1 to 30, one number per line, then say DONE, and also say BANANA at the end.\n\nThis is a straightforward request. I'll simply output the numbers 1-30, each on a new line, then say DONE, and then say BANANA.",
+                "signature": "scrubbed-signature"
               }
             ],
             "stop_reason": null,
@@ -1247,9 +798,9 @@
           },
           "parent_tool_use_id": null,
           "session_id": "uuid-scrubbed-0003",
-          "uuid": "uuid-scrubbed-0042",
-          "timestamp": "2026-08-17T22:46:28.488Z",
-          "request_id": "req_011Ce98gRDrkAEKUMYxAAu3H"
+          "uuid": "uuid-scrubbed-0027",
+          "timestamp": "1970-01-01T00:00:00.000Z",
+          "request_id": "req-scrubbed-0001"
         },
         "meta": {
           "interruptArtifact": false,
@@ -1269,7 +820,7 @@
           },
           "session_id": "uuid-scrubbed-0003",
           "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0043"
+          "uuid": "uuid-scrubbed-0028"
         },
         "meta": {
           "interruptArtifact": false,
@@ -1293,7 +844,7 @@
           },
           "session_id": "uuid-scrubbed-0003",
           "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0044"
+          "uuid": "uuid-scrubbed-0029"
         },
         "meta": {
           "interruptArtifact": false,
@@ -1312,12 +863,12 @@
             "index": 1,
             "delta": {
               "type": "text_delta",
-              "text": "1\n2\n3\n4\n5\n6\n7\n8\n9"
+              "text": "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23"
             }
           },
           "session_id": "uuid-scrubbed-0003",
           "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0045"
+          "uuid": "uuid-scrubbed-0030"
         },
         "meta": {
           "interruptArtifact": false,
@@ -1336,12 +887,12 @@
             "index": 1,
             "delta": {
               "type": "text_delta",
-              "text": "\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n\nDONE\n\nBANANA"
+              "text": "\n24\n25\n26\n27\n28\n29\n30\n\nDONE\n\nBANANA"
             }
           },
           "session_id": "uuid-scrubbed-0003",
           "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0046"
+          "uuid": "uuid-scrubbed-0031"
         },
         "meta": {
           "interruptArtifact": false,
@@ -1357,7 +908,7 @@
           "type": "assistant",
           "message": {
             "model": "claude-haiku-4-5-20251001",
-            "id": "msg-scrubbed-0003",
+            "id": "msg-scrubbed-0002",
             "type": "message",
             "role": "assistant",
             "content": [
@@ -1386,9 +937,9 @@
           },
           "parent_tool_use_id": null,
           "session_id": "uuid-scrubbed-0003",
-          "uuid": "uuid-scrubbed-0047",
-          "timestamp": "2026-08-17T22:46:28.837Z",
-          "request_id": "req_011Ce98gRDrkAEKUMYxAAu3H"
+          "uuid": "uuid-scrubbed-0032",
+          "timestamp": "1970-01-01T00:00:00.000Z",
+          "request_id": "req-scrubbed-0001"
         },
         "meta": {
           "interruptArtifact": false,
@@ -1408,7 +959,7 @@
           },
           "session_id": "uuid-scrubbed-0003",
           "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0048"
+          "uuid": "uuid-scrubbed-0033"
         },
         "meta": {
           "interruptArtifact": false,
@@ -1457,7 +1008,7 @@
           },
           "session_id": "uuid-scrubbed-0003",
           "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0049"
+          "uuid": "uuid-scrubbed-0034"
         },
         "meta": {
           "interruptArtifact": false,
@@ -1476,7 +1027,7 @@
           },
           "session_id": "uuid-scrubbed-0003",
           "parent_tool_use_id": null,
-          "uuid": "uuid-scrubbed-0050"
+          "uuid": "uuid-scrubbed-0035"
         },
         "meta": {
           "interruptArtifact": false,
@@ -1556,7 +1107,7 @@
           "request_sent_wall_ms": 0,
           "type": "result",
           "duration_ms": 0,
-          "uuid": "uuid-scrubbed-0051"
+          "uuid": "uuid-scrubbed-0036"
         },
         "meta": {
           "interruptArtifact": false,

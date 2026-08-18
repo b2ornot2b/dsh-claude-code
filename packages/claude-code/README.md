@@ -16,7 +16,7 @@ Consumers:
 > (`packages/claude-code/claude-code/`) is a mechanical move rather than a rename — we do not
 > own the `@deepseek-ai` npm scope and cannot publish into it.
 
-**Phase status: Phase 5 (model-facing tools).** `open()` is real: it mints the shared dsh/CC id,
+**Phase status: complete through Phase 7 (final).** `open()` is real: it mints the shared dsh/CC id,
 resolves the SDK options, spawns (or adopts a pre-warmed) Claude Code subprocess, awaits the
 initialize handshake and registers the session. `send()` / `interrupt()` / `waitForResult()` /
 `onMessage()` / `onSend()` live on the `CcSession` actor, reachable through
@@ -37,10 +37,12 @@ real dsh session sharing the same id, and registers it with `ctx.agents`. The on
 here is `CcSession.setModel()` — a thin `query.setModel()` passthrough, and the only
 model-switching path a CC-backed agent has (see "Waterfalls that are silently inert").
 
-Still scaffolded, with the phase named in the code:
-
-- **Phase 7** — rich tool cards. Every tool renders through the generic card today
-  (`presentCall` returns `card: 'generic'`); the Claude-Code-specific views come later.
+Phase 7 closed the dead-subprocess lifecycle gap (a subprocess that exits or dies now runs the
+same close path an explicit `close()` does, tagged `exited`/`crashed` — see
+`CcSession.close()` and `snapshot().closeReason`) and landed the card projections for Claude
+Code's own tools (`presentCcToolCall` / `presentCcToolResult` in `src/cards.ts`). Those
+projections are **not reachable from a dsh UI in rc.7**, for a structural reason documented in
+full at the top of `src/cards.ts` and summarized under "Known limitations" below.
 
 ### Running the tests
 
@@ -54,16 +56,20 @@ Loader, which imports each row's **built** `lib/index.js` — that is what prove
 `exports` map, the `inject` list, the `Config` schema and the SDK-free `lib/types` for real,
 rather than against TypeScript sources.
 
-The live suite (`tests/live/`) drives twelve real specs on
+This package's live suite (`tests/live/`) is seventeen spec files on
 `claude-haiku-4-5-20251001` with one-sentence prompts and isolated tmp working
 directories, and asserts on a `pgrep` delta that no subprocess outlives a test. It is
-gated with `describe.skipIf` so the default suites stay offline-green. Two of those specs
+gated with `describe.skipIf` so the default suites stay offline-green. Three of those specs
 serve the mirror: `record-fixtures.live.spec.ts` re-records the scrubbed transcripts under
-`tests/fixtures/` (replayed offline by `mirror-golden.spec.ts`), and
+`tests/fixtures/` (replayed offline by `mirror-golden.spec.ts`),
 `mirror-e2e.live.spec.ts` runs a live tool call through a real `SessionStore` session and
-round-trips the resulting log through `Session.fromRestore`. A third,
-`mirror-cancel.live.spec.ts`, covers the two turns that never get a normal result: one
-interrupted mid-block, and one whose session is closed outright while it runs.
+round-trips the resulting log through `Session.fromRestore`, and
+`mirror-cancel.live.spec.ts` covers the two turns that never get a normal result: one
+interrupted mid-block, and one whose session is closed outright while it runs. A fourth,
+`failures.live.spec.ts` (Phase 7), is the §12 failure-injection set against a real
+subprocess: SIGKILL mid-turn with a pending ask, a close over a never-answered
+interactive ask, and an approval answer that arrives after `interrupt()` withdrew the
+request.
 
 ---
 
@@ -81,9 +87,9 @@ assumes it can will be silently wrong the first time CC auto-compacts.
 | Member | Phase 4 behavior |
 |---|---|
 | `open(options)` | opens (or resumes, or forks) a live session and returns its snapshot. Refuses a non-absolute or missing `cwd` with `INVALID_CWD` **before** anything spawns, and a session past `limits.maxConcurrentSessions` with `SESSION_LIMIT` |
-| `get(id)` | the live snapshot of a registered session (status, model, pending asks), `undefined` when unknown |
-| `list()` | every live session, in open order; a fresh array per call |
-| `close(id)` | settles pending asks, aborts, closes the SDK query, ends the input stream, drops the registry entry |
+| `get(id)` | the snapshot of a registered session (status, model, pending asks) — or, for one that closed recently, its final snapshot with `closeReason`. `undefined` only when this context never opened it. Ask `session(id)` instead when the question is "is it still live?" |
+| `list()` | every LIVE session, in open order; a fresh array per call. Never includes a closed one |
+| `close(id)` | settles pending asks, aborts, closes the SDK query, ends the input stream, drops the registry entry. Returns `false` for an id with nothing live to close |
 | `session(id)` | the `CcSession` actor — `send` / `interrupt` / `waitForResult` / `onMessage`. Values (snapshots) cross tool boundaries; this handle does not |
 | `accountInfo()` | the account from the first live session's cached initialize response. Throws `NO_LIVE_SESSION` when nothing is open: it never spawns a subprocess of its own |
 | `attachMirror(id, session, opts?)` | mirrors a live session into a dsh session log (see below). Throws `UNKNOWN_SESSION` for an unregistered id; when the session closes the mirror is finalized (a turn left open by a mid-turn death is closed as `aborted`/`disposed`) and then detached |
@@ -92,6 +98,14 @@ assumes it can will be silently wrong the first time CC auto-compacts.
 
 All session lifecycle is registered through `ctx.effect()`, so disposing the plugin fiber
 (HMR, plugin unload, process teardown) closes every session this service opened.
+
+**A session can also close itself.** If the SDK's message iterator completes or throws — the
+subprocess exited, was killed, or its transport broke — the pump runs the same close sequence,
+tagged `exited` (it ended between turns) or `crashed` (it ended mid-turn, so that turn will never
+produce a result). Everything downstream of a close therefore happens with nobody asking: pending
+asks are denied, `waitForResult()` waiters fail with `SESSION_CLOSED`, the mirror's dangling turn
+is finalized, the registry entry is dropped, and a background job settles. Read
+`get(id)?.closeReason` to tell the three apart; `status` reports `closed` for all of them.
 
 ## The ask channel
 
@@ -409,14 +423,32 @@ over its own transcript, which the dsh mirror neither feeds nor invalidates.
 - **Pre-warming starts helping from the SECOND open** — `startup()` freezes `cwd` (and every
   other option), so the first open of a given shape is always cold and the pool warms
   afterwards for the next one. A changed shape discards the held subprocess.
-- **Rich tool cards are still Phase 7** — every `claude_code_*` call renders through the
-  generic card today. The six model-facing tools themselves are real as of Phase 5 (see
-  `@deepseek-ai/dsh-tool-claude-code`), and the CC-backed dsh `Agent` is real as of Phase 6
-  (see `@deepseek-ai/dsh-claude-code-agent`).
-- **A subprocess that dies on its own does not close its session** — a `CcSession` reaches
-  `closed` only through `close()`, so an externally killed CLI leaves the session (and any
-  job tracking it) `running` until something calls `close()`. A seam-side "pump ended →
-  close" path is the fix and is deferred.
+- **Cards for Claude Code's OWN tools cannot reach a dsh UI in rc.7.** `presentCcToolCall()`
+  / `presentCcToolResult()` map CC's tools onto dsh's render vocabulary (`terminal` for
+  `Bash`, `diff` for `Write`/`Edit`, `read` for a completed `Read`, category-hinted
+  `generic` otherwise) and are pure, total and fixture-tested — but a card is DERIVED by a
+  name lookup in the tool registry (`ctx.tools.get(name, scope)?.presentCall?.(…)`,
+  `packages/host/apiproxy/src/api-proxy.ts:756-770`), and nothing registers `Bash`/`Write`/
+  `Edit`/`Read` (dsh's own are lowercase). The `tool/call` event has no view slot at all
+  (`packages/core/session/src/types.ts:279`). So nothing is written into the log: every input
+  these projections need is ALREADY durable there (`name` + raw `arguments` + result
+  content), which makes the card a pure function of the record rather than a payload to
+  store. Registering the names would advertise them to that scope's model — `visible` is the
+  same map `schemas()` reads (`packages/core/tools/src/index.ts:1234-1236`). The upstream fix
+  is a presentation-only registration, or a name-independent view path; see `src/cards.ts`
+  for the full evidence trail. The seam's own six `claude_code_*` tools do render cards.
+- **A dead subprocess now closes its own session.** When the SDK's message iterator completes
+  or throws, the pump runs the SAME close sequence an explicit `close()` does, tagged
+  `exited` (ended between turns) or `crashed` (ended mid-turn / threw); an asked-for close is
+  `closed`. `snapshot().closeReason` is the only place the three are distinguishable — status
+  collapses them all to `closed`. This retires the Phase 6 limitation that a killed CLI left
+  its session, its pending asks, its waiters, its dangling mirror turn and any job tracking
+  it stuck until somebody called `close()` by hand.
+- **`get(id)` answers for a recently closed session; `list()` and `session(id)` do not.**
+  Because a subprocess can now close its own session, `get()` keeps a bounded tombstone
+  (`CLOSED_SESSION_HISTORY`, 32) so the status call that FOLLOWS a crash gets
+  `status: 'closed'` + `closeReason` instead of "no such session". Use `session(id)` to ask
+  "is this still live?" — that is the live-actor lookup.
 - **A resumed session keeps its id; a live one cannot be resumed** — SDK 0.3.233 refuses a
   caller-supplied `sessionId` alongside `resume` unless `fork` is set, so a plain resume
   continues under the id it resumed. Resuming a session that is still open in this context is

@@ -256,8 +256,8 @@ class ClaudeCodeService extends Service implements ClaudeCode {
   readonly config: ResolvedClaudeCodeConfig
   constructor(ctx: Context, config?: ClaudeCodeConfig)
   open(options: CcOpenOptions): Promise<CcSessionSnapshot>
-  get(id: CcSessionId): CcSessionSnapshot | undefined
-  list(): readonly CcSessionSnapshot[]
+  get(id: CcSessionId): CcSessionSnapshot | undefined   // live, else a recently-closed tombstone
+  list(): readonly CcSessionSnapshot[]                  // LIVE sessions only
   close(id: CcSessionId): Promise<boolean>
   accountInfo(): Promise<CcAccountInfo>
   // Phase 3:
@@ -406,6 +406,7 @@ class CcSession {
   get initializeResult(): CcInitializeResult | undefined   // commands, models, account, output_style
   get account(): CcAccountData | undefined
   get lastResult(): CcMessageEnvelope | undefined
+  get closeReason(): CcCloseReason | undefined  // Phase 7 — undefined while live
   outbox(): readonly CcOutboxEntry[]
   snapshot(): CcSessionSnapshot
 
@@ -416,14 +417,38 @@ class CcSession {
   interrupt(options?: CcInterruptOptions): Promise<CcInterruptOutcome>
   onMessage(listener: CcMessageListener): () => void
   onSend(listener: CcSendListener): () => void   // Phase 3 — outgoing messages
-  onClose(listener: () => void): () => void
+  onClose(listener: (reason: CcCloseReason) => void): () => void   // Phase 7: carries WHY
   // Phase 4:
   attachAskTarget(target: CcAskTarget): () => void    // throws ASK_UNAVAILABLE with no ask channel
   attachAskCallSite(site: CcAskCallSite): () => void  // the service wires the mirror in
   onAskError(listener: (error: ClaudeCodeError) => void): () => void
-  close(): Promise<void>               // idempotent
+  close(reason?: CcCloseReason): Promise<void>   // idempotent; defaults to 'closed'
 }
 ```
+
+**A dead subprocess closes its own session (Phase 7).** When the SDK's message
+iterator completes — the subprocess exited, was killed, or its stream threw —
+the pump routes into the SAME `close()` an explicit close uses, tagged with the
+cause. There is exactly one close sequence; `reason` is the only thing that
+differs, which is what keeps the two paths from drifting:
+
+| `CcCloseReason` | when | what it means |
+|---|---|---|
+| `closed` | `claude_code_close`, `ClaudeCode.close()`, owner disposal, plugin teardown | somebody asked |
+| `exited` | the iterator completed with NO turn in flight | the subprocess ended between turns; every turn it was given ran |
+| `crashed` | the iterator completed with a turn in flight, or threw | the turn it was running will never produce a result |
+
+`closeReason` is an ADDITIVE optional field on `CcSessionSnapshot`, present
+exactly when `status` is `closed`. `status` still collapses all three, because
+for anything asking "can I still send to this?" they are the same answer.
+
+**The close is armed as a continuation on the settled pump promise, never issued
+from inside the pump body.** `runClose()` awaits `#pump` (that await is what
+guarantees no callback fires after `close()` resolves), so closing from within
+the loop would wait on the promise it is running inside. This is not a
+hypothetical: the in-pump version makes every case in
+`tests/session-death.spec.ts` hang rather than fail, which is why those tests
+are bounded.
 
 `onSend` exists because outgoing messages **never come back over `onMessage`**:
 the CLI does not echo the prompt it was given, so the send side is the only place
@@ -1416,6 +1441,9 @@ whole channel exists to hold.
     the job `running` until something closes the session (`claude_code_close`,
     `job_kill`, owner disposal, plugin teardown). Tracked as deferred work in
     the tool package README.
+    **Superseded by Phase 7 (correction 47):** the seam closes itself on pump
+    completion, so the job now settles `failed` on a crash and `completed` on a
+    clean exit, with no explicit close required.
 28. **The tool package gained one dependency:** `@deepseek-ai/dsh-jobs@0.1.0-rc.7`
     as peer + dev (types and the `JobKindMap` merge only — no runtime import).
     `@deepseek-ai/dsh-jobs-local` and `@deepseek-ai/dsh-tool-jobs` were added as
@@ -1547,6 +1575,9 @@ asserted directly.
     The current behaviour is pinned by `tests/orderings.spec.ts` so a future
     seam that self-closes shows up there first. The adapter README's claim that
     the agent "reads `idle`" in this state was wrong and has been corrected.
+    **FIXED in Phase 7 (correction 44).** The seam now closes on pump
+    completion, and the probe that pinned this has been inverted to assert the
+    new behaviour.
 43. **The live steer spec raced the model.** It waited 1.5s after
     `status === 'running'` before steering; haiku finished counting to 30 in
     under two seconds, so the steer landed on the turn boundary, was committed
@@ -1557,46 +1588,374 @@ asserted directly.
     `steer.live.spec.ts` has always avoided this. Confirmed over four
     consecutive live runs.
 
+### Phase 7 additions and corrections
+
+44. **The dead-subprocess gap (correction 42) is FIXED, in the seam.** Pump
+    completion now runs the same close sequence an explicit `close()` does,
+    tagged with a {@link CcCloseReason} (§4.4b). Everything that rode `onClose`
+    therefore just works: pending asks are denied, waiters released, the mirror
+    finalized, the registry entry dropped, the background job settled. The
+    Phase 6 probe in `packages/claude-code-agent/tests/orderings.spec.ts` that
+    pinned the OLD behaviour has been inverted — it was written to fail exactly
+    here — and now asserts `idle`, a settled `whenIdle()`, and a claimable
+    maintenance phase. `packages/claude-code/tests/session-death.spec.ts` is the
+    new suite, asserting the consumer effects rather than just the status field.
+45. **`ClaudeCode.get(id)` now answers for a recently closed session.** It
+    reads the live registry first and a bounded tombstone table second
+    (`CLOSED_SESSION_HISTORY`, 32 entries), returning `status: 'closed'` plus
+    the `closeReason`. `list()` and `session(id)` are UNCHANGED and remain
+    live-only. Reason: a dead subprocess now closes its own session, so the next
+    `claude_code_status` would otherwise answer `CC_NO_SESSION` — "it was never
+    opened here" — about a session the caller was handed the id of moments
+    earlier, which sends a model off to open a second one. Tests that used
+    `get()` to mean "is it still running?" were changed to `session()`, which is
+    the question they were actually asking.
+46. **`claude_code_status` answers for a closed session; every other tool still
+    does not.** It reports `status` plus a new optional `close_reason`
+    (`closed` / `exited` / `crashed`). `claude_code_send` / `_wait` / `_cancel`
+    keep failing `CC_NO_SESSION`: they need a live actor to drive, and the
+    model's remedy really is "open one". `claude_code_status` is the one call
+    whose entire purpose is answering "what happened to it?".
+47. **A backgrounded session's job settles from the close reason.** `crashed`
+    settles `failed` ("the Claude Code subprocess ended mid-turn"); `exited` and
+    `closed` settle `completed`; an already-issued `cancel` WINS over all three
+    and settles `killed`, so `job_kill` is never relabelled as a crash. `done`
+    still never rejects (D10). This retires the README limitation "a subprocess
+    that dies on its own does not settle its job".
+48. **Cards for mirrored CC tool traffic are NOT REPRESENTABLE in rc.7, and the
+    seam ships the projection without the payload.** `presentCcToolCall()` /
+    `presentCcToolResult()` (`src/cards.ts`) map CC's own tools onto dsh's
+    render-intent vocabulary — `terminal` for `Bash`, `diff` for `Write`/`Edit`,
+    `read` for a completed `Read`, category-hinted `generic` for the rest — and
+    are pure, total and fixture-tested. **Nothing is written into the session
+    log for them.** The evidence, which is structural rather than a matter of
+    effort:
+
+    - `SessionEventMap['tool/call']` is `{ turn, step, callId, name, arguments }`
+      with no view slot (`packages/core/session/src/types.ts:279`); `tool/result`
+      adds only `error?` and `meta?: JsonValue` (`types.ts:291-297`); the event
+      envelope has no free field either (`types.ts:404-436`).
+    - A card is not read off the log, it is DERIVED by a name lookup in the tool
+      registry: `ctx.tools.get(name, scope)?.presentCall?.(JSON.parse(raw))` and
+      `ctx.tools.get(call.name, scope)?.presentResult?.(...)`
+      (`packages/host/apiproxy/src/api-proxy.ts:756-770`). `meta` is threaded
+      INTO that call (`api-proxy.ts:770`) — it is an argument to a registered
+      tool's presenter, never a view in its own right.
+    - `ctx.tools.get()` resolves `view(scope).visible.get(name)`
+      (`packages/core/tools/src/index.ts:1204-1206`), built from what plugins
+      registered (`index.ts:1166-1191`). The mirror writes CC's names (`Bash`,
+      `Write`, `Edit`, `Read`); dsh's own tools are lowercase
+      (`packages/shell/tool-bash/src/index.ts:243`, `packages/fs/tool-fs/src/`).
+      Nothing registers the CapCase names, so the lookup misses and the event
+      ships viewless — the documented generic fallback (`api-proxy.ts:766`).
+
+    **Nothing is lost by not writing a payload**, which is why this shape is
+    right rather than a consolation: every input the projection needs is already
+    durable in the log (`tool/call` carries `name` + raw `arguments`,
+    `tool/result` carries the content), so the card stays a pure function of the
+    record, computable live and on replay. A payload parked in
+    `tool/result.meta` would be read by nobody, duplicate content the event
+    already carries, and grow every log containing a `Bash` call.
+
+    **Registering presenters is not a workaround.** `visible` is the SAME map
+    that feeds `schemas()` (`index.ts:1234-1236`), so registering `Bash` for its
+    card advertises `Bash` to that scope's model. The one narrow exception — an
+    `agent.ctx` registration lands in the agent's own layer (`index.ts:1037-1062`,
+    `1177-1183`) and a CC-backed agent never sends dsh schemas to a model (D8) —
+    covers only the ADAPTER path (a tool-opened session registers no agent, so
+    its presenter scope is global) and only while the agent is alive (a cold read
+    falls back to the preset standing key, `api-proxy.ts:1596-1613`). The same
+    log would render two ways depending on who looked and when.
+
+    **What closes it upstream:** a `presentation-only` registration on
+    `ToolRegistry` — presenters, no `execute`, excluded from
+    `schemas()`/`sdkSchemas()`/`resolveExecution()` — or a name-independent view
+    path in `viewFor()`. This module is the implementation either way.
+49. **Three fixture-scrubber defects, one of them a corruption.** (a) The
+    `msg_[A-Za-z0-9_-]+` pattern matched `msg_lifecycle_v1` — a `system/init`
+    CAPABILITY name — and rewrote it to `msg-scrubbed-0001` in all three
+    committed fixtures, i.e. the scrubber was destroying the deterministic value
+    this seam feature-detects on (S14). Real ids are `msg_` + 16-or-more
+    base62 with no separators, so the pattern now requires that, and `req_` ids
+    join it. (b) `estimated_tokens`/`estimated_tokens_delta` (numeric) and
+    `timestamp`/`signature` (string) were unscrubbed and dirtied every fixture on
+    every sweep. (c) `system/init`'s `slash_commands`, `terminal_slash_commands`,
+    `skills`, `agents` and `plugins` are the RECORDER'S machine — they change
+    when anyone installs a plugin and carried a developer's personal
+    configuration into a checked-in file. They are replaced with a marker; the
+    mirror reads none of them (`CcMirror.onSystem` reads `model` only). `tools`
+    is deliberately left verbatim as the one list a fixture could be read
+    against, and is the documented remaining churn source.
+    `tests/scrub.spec.ts` pins both directions — what is erased AND what must
+    not be — plus idempotence against the committed files.
+50. **Fixture stability was verified across THREE independent live sweeps.**
+    After the scrubber fixes, the residual diff between sweeps is exactly
+    model-authored content (thinking/text/`partial_json` bodies, the tool
+    `description` prose, and the resulting chunk COUNT) — irreducible, since a
+    live model does not re-emit identical tokens. The offline suite is green
+    against all three recordings, which is the property that actually matters:
+    the goldens assert framing and skeleton, not prose. One card assertion that
+    had transcribed the model's `description` literal was corrected to assert
+    the MAPPING against the recorded input, so an honest re-record no longer
+    looks like a regression.
+51. **The seam gained a type-only dependency on `@deepseek-ai/dsh-tools`**
+    (peer + dev, exact `0.1.0-rc.7`, matching every other pin). `src/cards.ts`
+    imports `ToolCallView`/`ToolResultView` and friends as TYPES, so the views
+    are dsh's own by construction rather than a structural copy that could
+    drift. No runtime import, no pin moved.
+
+### Phase 7 Stage 2 — failure injection (live) and the E2E demo
+
+52. **The §12 failure-injection list is now covered LIVE, split across the
+    three packages whose own guarantee each scenario exercises**, so each
+    file asserts what that PACKAGE promises rather than reaching into a
+    sibling's composition:
+
+    - `packages/claude-code/tests/live/failures.live.spec.ts` — the seam
+      itself. A real subprocess is SIGKILLed mid-turn with a pending ask held
+      open (a scripted `approval/request` answerer that never resolves):
+      `CcSession.status` reaches `closed`, `closeReason` is `crashed`/`exited`,
+      `pendingAsks` drops to `0` (the ask denied, not leaked), `waitForResult`
+      REJECTS typed `SESSION_CLOSED` rather than hanging, `ClaudeCodeService.get()`'s
+      tombstone agrees, and the mirror's dangling turn closes `aborted` and
+      accepts a fresh append — correction 44, observed live rather than only
+      against the fake seam (`session-death.spec.ts`). A second spec covers
+      the OTHER §12 item Phase 4 didn't (`close()` on a never-answered
+      INTERACTIVE ask — `delegated: false` selects no timeout at all, so only
+      a human answering or the session closing settles it; `close()` must not
+      hang). A third proves §4.6's "late answer discarded" LIVE: a scripted
+      answerer that decides on its own 4s clock, unaware of cancellation, is
+      raced against `session.interrupt()`, which withdraws the SDK's pending
+      `canUseTool` request and settles the ask well before the answerer's
+      late resolve arrives — confirming, against the real SDK, that
+      `interrupt()` (not just `close()`) aborts an in-flight permission
+      request's signal. The late resolve then arrives and does nothing:
+      no throw, no double-settle, session still usable for a follow-up turn.
+    - `packages/claude-code-agent/tests/live/agent-kill.live.spec.ts` — the
+      agent adapter. Same SIGKILL, but through `ctx.claudeCodeAgents.spawn()`
+      with NO `cancel()`/`dispose()` call: `agent.status` reaches `idle` and a
+      `whenIdle()` parked BEFORE the kill resolves on its own — the live
+      confirmation the README's "a dead subprocess reaches `idle`" bullet
+      promised but had only an offline probe for.
+    - `packages/tool-claude-code/tests/live/tools-background-kill.live.spec.ts`
+      — the background-job half. SIGKILL (never `job_kill`, never
+      `claude_code_close`) settles the job `failed` exactly once via
+      `outcomeFor`'s dead-subprocess row, `job_list` shows the terminal state,
+      no orphan subprocess remains.
+
+    All three assert **zero `unhandledRejection`s** via a shared
+    `captureUnhandledRejections()` helper (`packages/claude-code/tests/live/helpers.ts`)
+    — the exact failure mode a dead subprocess used to produce when a promise
+    was left with nobody to settle it.
+
+    One live-only gotcha the fixed suites found: a `sleep N && echo done` Bash
+    prompt — tried first for the "keep a turn open long enough to kill it"
+    scenarios — never triggers `canUseTool` at all. The CLI's own safe-command
+    classifier auto-approves it BELOW the callback (the same gotcha spike 4
+    already documented for `echo`), so the test hung waiting for a
+    `pendingAsks` that would never appear. `touch <unseen-path>` (the pattern
+    every other ask-channel live spec already used) does trigger it reliably;
+    the failure specs were changed to match rather than widening a timeout on
+    a prompt that was never going to ask.
+
+53. **`examples/delegation-demo/` is the project's acceptance artifact** — a
+    human runs `pnpm run build && node examples/delegation-demo/run.mjs` and
+    watches the whole integration work, no test runner involved. It boots the
+    real composition from its own `cordis.yml` (all three packages, plus
+    `dsh-session`/`dsh-agent`/`dsh-user-approval`/`dsh-user-questions`/
+    `dsh-jobs-local`+`dsh-tool-jobs`) through the same Loader sequence
+    `tests/composition/composition.spec.ts` uses, registers a SIMPLE
+    auto-answerer for approvals and questions that logs every decision it
+    makes, stands in a minimal dsh `Agent` for "the delegating DeepSeek
+    agent" (a real `Session` with an open turn, registered as a registry
+    root — the same shape the live test helpers' `registerRootAgent` uses),
+    and has that agent call `claude_code_open` for real: "create a file with
+    this exact content." It prints every auto-approval as it happens, the
+    tool's canonical JSON result, the mirrored dsh session's full event-type
+    timeline, and the created file's path and content, then closes the
+    session and disposes the composition cleanly. Exit code `0` and the
+    file's existence are the acceptance bar; `run.live.spec.ts` (a new
+    `examples` vitest project, gated `DSH_CC_LIVE=1` exactly like every other
+    live spec) asserts both by spawning the script as a real subprocess and
+    checking its printed markers plus the file on disk — never by importing
+    the demo's internals.
+
+### Phase 7 Stage 3 — final verification
+
+54. **`CcSession.close()` was RE-ENTRANT, and is now guarded.** `close()` tested
+    only `#closing`, which `runClose()` assigns *after* its whole synchronous
+    prefix — and that prefix includes the `onClose` listener loop. A listener
+    that called `close()` from inside its own notification therefore found
+    `#closing` still unset and started a SECOND close sequence over a
+    half-torn-down session: asks re-settled, the query re-closed, the input
+    stream re-ended, and every close listener re-invoked — including itself.
+    Nothing bounded it, because `#closeListeners` is cleared *after* the loop,
+    not before it, so the real-world outcome is a stack overflow rather than a
+    wrong value. Reproduced by probe (a listener capped at five re-entries saw
+    six invocations where it must see one) before the fix, and pinned
+    afterwards by two regression tests in
+    `packages/claude-code/tests/session-death.spec.ts` — one for an explicit
+    close, one for a close the dead subprocess triggered (which additionally
+    asserts the re-entrant call's default `'closed'` does not overwrite the
+    real `'exited'`). Both are counter-capped so the regression fails an
+    assertion instead of crashing the worker.
+
+    The guard is `if (this.#closed) return`, placed after the `#closing` check.
+    `#closed` is set on `runClose()`'s first line, so it is the flag that covers
+    exactly the window `#closing` cannot. Returning WITHOUT awaiting is the only
+    correct answer: the caller is executing inside the close it would otherwise
+    be waiting for — the same reasoning that puts the pump's self-close on a
+    `.then` rather than in the pump body (item 44).
+
+    No shipped `onClose` subscriber does this today (the service's registry
+    cleanup, the mirror's finalize/dispose, the background job's settle and the
+    agent's status sync all avoid it), which is why offline and live suites were
+    green over it. `onClose` and `close()` are both public, and "tear my thing
+    down when the session closes" is the obvious thing to write in one.
+55. **`pnpm-lock.yaml` was stale, and only a clean-state gate could see it.**
+    Item 51 added `@deepseek-ai/dsh-tools` to `packages/claude-code/package.json`
+    without regenerating the lockfile, so
+    `pnpm install --frozen-lockfile` — which is the DEFAULT in CI — failed with
+    `ERR_PNPM_OUTDATED_LOCKFILE` on a fresh clone. Every incremental
+    `pnpm install` in the working tree had silently reconciled it. Regenerated;
+    the clean-state gate now passes frozen. **Add `--frozen-lockfile` to the
+    verification sequence below**: a plain `pnpm install` cannot fail this way
+    and therefore cannot detect it.
+
+    Two adjacent facts worth recording for whoever runs the gates next. First,
+    a true clean state must also delete `*.tsbuildinfo` (gitignored, so a fresh
+    clone has none): removing `lib/` alone leaves `tsc -b` believing it is up to
+    date, so it emits NOTHING and the two consumer packages fail with a
+    confusing cascade of `TS6305 — output file has not been built from source
+    file`. `pnpm run clean` (`tsc -b --clean`) does the right thing. Second,
+    a `pgrep` orphan check sampled the instant `vitest` exits reads a
+    still-exiting subprocess as an orphan — the suite's own assertions use
+    `waitForSessionProcessCount(id, 0, 15_000)`, a BOUNDED poll, for exactly
+    that reason. Give a whole-sweep orphan check the same grace or it reports
+    false positives.
+
+56. **Three live specs flaked across Stage 3's sweeps. All three were fixed in
+    the tests; none was a defect in `src/`.** The rule the two-sweep bar
+    enforces is that a flake gets diagnosed, not re-run — and the diagnosis was
+    the same shape twice: *the spec waited on a proxy for the thing it cared
+    about.*
+
+    (a) **`failures.live.spec.ts` — answer-after-cancel** waited for
+    `session.pendingAsks > 0` and then asserted the scripted answerer had been
+    called exactly once. The router books the pending ask BEFORE it awaits
+    `ctx.approval.request()`, and the approval service appends its own audit
+    events before dispatching `approval/request` — so `pendingAsks > 0` is
+    reachable a poll or two before the listener runs. Failed
+    `expected 0 to be 1` in one sweep, passed in the next. The barrier now
+    waits on the answerer itself, which cannot fire before the ask is booked
+    and holds it for 4s afterwards, so the `pendingAsks` assertion that follows
+    is race-free in both directions.
+
+    (b) **`prewarm.live.spec.ts` — the known "contention flake" was misdiagnosed
+    and is now actually fixed.** The standing note (carried since Phase 2's
+    Stage 2) blamed "a neighbour consuming the shared pool's warm slot", which
+    cannot happen: `mountLive()` gives every test its own service and therefore
+    its own pool. The real cause is a fixed time budget racing a real
+    subprocess. `spy.startupCount` increments the instant `backend.startup()`
+    is INVOKED, but `CcWarmPool.startWarm()` stores the lease only in the
+    continuation after that promise resolves — so the spec waited on the
+    invocation count and then slept a flat `2_000` ms to cover the spawn +
+    initialize handshake. That handshake is ~300ms in isolation (spike 5) and
+    unbounded under a thirty-file parallel sweep, and when it lost, session B
+    opened cold and got a fresh id (`expected 'd738…' to be '44b6…'`). The spy
+    gained `startupSettledCount` (incremented in a `finally`, so a FAILED
+    pre-warm releases the waiter too rather than turning into a timeout), the
+    spec now waits on it, and the flat 2s became a single 100ms tick to clear
+    the one microtask between the counter and `#held`. Verified 3/3 in
+    isolation after the change. **Delete the "prewarm can flake" caveat from
+    §7a on the next pass that touches it** — it described a cause that was not
+    real.
+
+    (c) **`ask-plan.live.spec.ts` — the revise case** saw `planCalls === 0` in
+    one sweep: Haiku answered the plan prompt in prose without ever calling
+    `ExitPlanMode`, so the plan-review path was never entered. Three
+    consecutive isolated runs passed, so this is model nondeterminism under
+    load, not a router defect. Getting Claude into a plan review is the spec's
+    SETUP; what it tests is what the ask channel does once one arrives. So the
+    setup became a bounded re-prompt (`driveUntilPlanReviews`, at most two
+    extra turns) and **no assertion moved** — `planCalls >= 2`, the
+    different-detail check on the revised plan, and the executed-file check all
+    stand exactly as they were. Weakening `>= 2` to `>= 1` would have deleted
+    the behaviour under test; adding turns does not.
+
 ## 6. Verification before you report
 
 ```sh
-pnpm install                       # from the repo root; zero peer warnings
+# A TRUE clean state — *.tsbuildinfo is gitignored, so leaving one behind makes
+# `tsc -b` emit nothing and the consumers fail with a TS6305 cascade (item 55).
+rm -rf node_modules packages/*/node_modules packages/*/lib
+find . -name '*.tsbuildinfo' -not -path '*/node_modules/*' -delete
+
+pnpm install --frozen-lockfile     # --frozen-lockfile is the CI default; a plain
+                                   # `pnpm install` cannot detect a stale lockfile (item 55)
 pnpm run typecheck                 # every package builds + every spec type-checks
 pnpm run build                     # tsc -b per package -> lib/index.js + lib/types/index.d.ts
-pnpm test                          # build, then vitest run (unit + composition), offline
+pnpm test                          # build, then vitest run (unit + composition + examples), offline
 pnpm run test:live                 # OPT-IN: DSH_CC_LIVE=1, real subprocesses (§7a)
 ```
 
-All are green as of the **Phase 6 Stage 3 merge point**:
+All are green as of the **Phase 7 Stage 3 merge point** — the project's final
+verification, run from the true clean state above (failure injection + the E2E
+demo + Stage 3's close-reentrancy and lockfile fixes, on top of Stage 1's
+dead-subprocess fix / cards / scrubber work):
 
 - `pnpm run typecheck` — clean across all three packages plus
-  `tsconfig.tests.json`, under NodeNext / strict / `exactOptionalPropertyTypes` /
-  `skipLibCheck: false`.
+  `tsconfig.tests.json` (now also covering `examples/**/*.ts`), under NodeNext
+  / strict / `exactOptionalPropertyTypes` / `skipLibCheck: false`.
 - `pnpm run build` — clean.
-- `pnpm test` (build, then both vitest projects) — **417 passed / 38 skipped, 29
-  files (+26 skipped)**. The 38 skipped are the `DSH_CC_LIVE`-gated live specs,
-  collected and skipped. Every unit test runs offline against a fake backend;
-  `pnpm test` spawns no subprocess and makes no network call.
-  - `pnpm run test:unit` alone — **404 passed / 38 skipped**.
+- `pnpm test` (build, then all THREE vitest projects — `unit`, `composition`,
+  and the new `examples`) — **502 passed / 44 skipped, 32 files (+30
+  skipped)**, run TWICE with byte-identical results (the goldens are
+  deterministic). The two tests above the Stage 2 count are Stage 3's
+  close-reentrancy regressions (item 54).
+  The 44 skipped are the `DSH_CC_LIVE`-gated live specs
+  (43 under `unit`, 1 under `examples`), collected and skipped. Every unit
+  test runs offline against a fake backend; `pnpm test` spawns no subprocess
+  and makes no network call.
+  - `pnpm run test:unit` alone — **489 passed / 43 skipped**.
   - `pnpm run test:composition` alone — **13 passed**, booting both `cordis.yml`
     and `cordis-no-jobs.yml` through the real Loader against built `lib/` output.
-  - `packages/claude-code-agent` contributes **78 passed / 7 skipped**:
-    `agent.spec.ts` 30, `orderings.spec.ts` 22, `spawn.spec.ts` 14,
-    `inert.spec.ts` 5, `plugin.spec.ts` 4, `exports.spec.ts` 3.
-- `pnpm run test:live` — **38 passed / 26 files** against the real SDK
-  (`claude-haiku-4-5-20251001`, claude.ai subscription, no `ANTHROPIC_API_KEY`),
-  ~62s wall, with `pgrep` confirming zero surviving subprocesses afterwards.
-  `packages/claude-code-agent/tests/live/` is 7 of those tests across 6 files.
+  - `packages/claude-code-agent` contributes **78 passed / 8 skipped** (the
+    extra skip is `agent-kill.live.spec.ts`, new this stage): `agent.spec.ts`
+    30, `orderings.spec.ts` 22, `spawn.spec.ts` 14, `inert.spec.ts` 5,
+    `plugin.spec.ts` 4, `exports.spec.ts` 3.
+- `pnpm run test:live` (now also covering the `examples` project) — **44
+  passed / 30 files**, ZERO failures, against the real SDK
+  (`claude-haiku-4-5-20251001`, claude.ai subscription, no `ANTHROPIC_API_KEY`).
+  Run TWICE back to back (the Phase 6 bar): both sweeps green, **77s and 67s**
+  wall, with `pgrep -f 'claude-agent-sdk-[a-z0-9-]*/claude'` at zero before,
+  between and after them (given the settle window the note below explains).
+  Stage 3 restarted this two-run count TWICE — once per flake found (item 56) —
+  rather than re-running until it went green; the numbers above are from the
+  first pair of sweeps after both fixes landed.
+  `packages/claude-code-agent/tests/live/` is 8 of those tests
+  across 7 files; `packages/tool-claude-code/tests/live/` and
+  `packages/claude-code/tests/live/` carry the rest of Stage 2's new files
+  (`failures.live.spec.ts`, `tools-background-kill.live.spec.ts`);
+  `examples/delegation-demo/run.live.spec.ts` is the 30th file.
 
-Two live-suite notes that are not defects in this integration:
-`packages/claude-code/tests/live/prewarm.live.spec.ts` fails intermittently under
-the 26-file parallel sweep (a neighbour consumes the shared pool's warm slot
-first) and passes in isolation and on a clean re-run — a parallel-machine
-contention flake, reproduced and then cleared here as it was in Phase 2's Stage
-2. And `record-fixtures.live.spec.ts` re-records three mirror fixtures on every
-live run; `mirror-golden.spec.ts` was re-run against the FRESH recording (6
-passed, projection still deterministic) before the fixtures were reverted, so
-the working tree stays scoped to the change under review.
+Live-suite notes that are not defects in this integration:
+
+- `packages/claude-code/tests/live/prewarm.live.spec.ts`'s long-standing
+  "contention flake" (carried since Phase 2's Stage 2) was **misdiagnosed and is
+  now fixed** — see item 56(b). It was never contention: every test gets its own
+  pool. It was a flat 2s sleep standing in for a real spawn + handshake, and the
+  spec now waits on the pre-warm actually settling.
+- `record-fixtures.live.spec.ts` re-records three mirror fixtures on every live
+  run, exactly as before; the working tree was left scoped to the change under
+  review.
+- **A `pgrep` orphan check must be given a settle window.** A closed session's
+  subprocess exits on stdin EOF plus a ~2s grace, so sampling the instant
+  `vitest` exits reads a straggler as an orphan. Every in-suite assertion
+  already uses the bounded `waitForSessionProcessCount(id, 0, 15_000)`; a
+  whole-sweep check run from a shell needs the same grace. Stage 3 initially
+  reported one "orphan" this way and confirmed on inspection that the process
+  had already gone (item 55).
 
 ## 7. The Phase 1 acceptance test
 
@@ -1677,14 +2036,24 @@ each driving a REAL Claude Code subprocess through the real backend and a real
   directory's `helpers.ts` mounts `SessionStore` + `AgentRegistry` +
   `UserQuestionService` + `ApprovalService` + a real `ClaudeCodeService` + the
   adapter plugin as ONE composition, and exposes the adapter plugin's own fiber
-  separately so the HMR spec can dispose only that. What remains for Phase 7 is
-  failure injection (killing a subprocess out from under a live agent, which is
-  what would exercise correction 42) and the agent-card / UI surface.
+  separately so the HMR spec can dispose only that. **Phase 7 Stage 2 added the
+  failure-injection live spec this note anticipated**: `agent-kill.live.spec.ts`
+  SIGKILLs a spawned agent's subprocess (correction 42, observed live) — see
+  item 52. What remains open is the agent-card / UI surface (item 48: not
+  representable in dsh rc.7, structural, not a to-do).
 - **Running the live suite rewrites three fixtures.**
   `record-fixtures.live.spec.ts` re-records `plain-text.json`, `steer.json` and
   `tool-call.json` on every live run, so `git status` shows them modified
   afterwards. That is the recorder working; `mirror-golden.spec.ts` is the check
   that the projection is still deterministic against the new recording.
+- **Phase 7 Stage 2 grew the suite to thirty files across four locations**
+  (`packages/claude-code/tests/live/` seventeen, `packages/claude-code-agent/tests/live/`
+  seven, `packages/tool-claude-code/tests/live/` five, plus the new
+  `examples/delegation-demo/run.live.spec.ts`) and ran it TWICE back to back
+  per the Phase 6 bar: both sweeps **44 passed / 30 files, zero failures**,
+  ~71–90s wall each, `pgrep` at zero orphan subprocesses after each sweep and
+  between them. See item 52 for what the three new failure-injection files
+  assert and item 53 for the demo.
 
 ### Still deferred (do not build now)
 
