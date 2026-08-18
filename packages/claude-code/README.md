@@ -214,6 +214,36 @@ on an unanswered `Write` approval while every consumer above the seam could see 
 "1 pending ask" — even though this table already held both the tool name and the sentence the
 human was looking at.
 
+**`recentAsks` reports what was DECIDED, and by whom.** Pending asks are visible; settled ones
+used to vanish. Beside `pendingAskDetails`, on both the actor and the snapshot, sits
+`readonly recentAsks: readonly CcAskReceipt[]` — a bounded ring (last **20**, newest last,
+oldest evicted) of
+`{ kind, toolName?, reason?, outcome, detail?, askedAt, settledAt, source }`:
+
+- `outcome` is one of `allowed | rejected | cancelled | answered | timed-out | fallback-denied |
+  unavailable`, mapped from the settle paths that actually exist (approval outcomes, question
+  answers, plan approve/decline, timeout + `askFallback`, session close);
+- `detail` carries the human's own choice where there is one — the option label(s) or custom
+  text they typed, a plan decline's feedback — and otherwise says which policy answered;
+- **`source` is `'human'` or `'policy'`**, and it is the reason the record exists.
+
+A delegating agent that could not make that distinction misgraded a working integration: with
+nothing saying a person had acted, it reported a human's rejection as "the denial was not
+propagated", a human's plan approval as "plan mode never engaged", and a human's answer of
+"hola" as the session auto-choosing. The classification is deliberately conservative — a
+`work` function that returns a bare `CcPermissionDecision`, a rule-cache hit, an SDK
+withdrawal, a timeout, a fallback and the close drain are all `'policy'` — because
+under-reporting a human is uninformative while inventing one is the defect itself.
+
+The ring is bounded because it is read, not stored: the durable audit record is the dsh session
+log's `approval/asked` + `approval/decided` pair. `CcAskTable.receiptsSince(since)` (and
+`CcAskRouter.recentAsksSince`) filters by settle time, which — with `CcSession.turnStartedAt` —
+is how a consumer reports exactly one turn's decisions. One receipt per SETTLE, never per
+delivery: a redelivered `requestId` (delta S12) is answered from the settled table or attached
+to the ask in flight, so the three deliveries of one `reinitialize()` leave one record, and a
+late answer racing a timeout is discarded rather than rewriting the receipt that already
+described the decision the SDK acted on.
+
 Four orderings the table is explicit about, because each of them is a way to hang or mislead
 a session rather than merely to answer it oddly:
 
@@ -429,6 +459,12 @@ Phase 4 adds the other half of that human-facing picture: an approval prompt now
 `callId` of the `tool/call` the mirror already streamed — so a UI can attach the prompt to the
 exact call it is about, instead of showing a tool call that silently failed.
 
+What the settled-ask receipts add is model-facing, one layer up: `CcSessionSnapshot.recentAsks`
+is what lets `@deepseek-ai/dsh-tool-claude-code` tell a delegating model "this permission was
+REJECTED by a human in the dsh UI" or "this question was answered by a human: 'hola'" — and,
+just as importantly, "this was denied by a timeout policy, NOT by a human". This package
+supplies the facts; that package supplies the sentences.
+
 Two things a reader of that log must not assume. It is **not** the model's context (§5.1):
 Claude Code owns and compacts its own history, so `deriveMessages()` reconstructs what dsh
 observed, never what CC will send. And the approval log is not a complete record of what CC
@@ -473,6 +509,15 @@ over its own transcript, which the dsh mirror neither feeds nor invalidates.
   `claude_code_status` does). An ask that opens and settles between two reads is invisible;
   that is acceptable because the field exists to explain a session that is *stuck*, and a
   stuck ask is by definition still there.
+- **`recentAsks` is a bounded ring, not an audit log** — the last 20 settles of a session, so a
+  turn that settles more than that loses its oldest receipts, and a resumed session starts
+  empty. The complete record is the dsh session log (`approval/asked` + `approval/decided`),
+  which is durable and unbounded; this is the tail a model can read in a tool result.
+- **`source: 'human'` means "a dsh answerer returned a decision", not "a specific person"** —
+  the seam has no identity of its own to report, and the deterministic `policy: 'never'` fold
+  arrives as the same `rejected` outcome a person produces. An `ApprovalOutcome` of
+  `'cancelled'` is therefore classified `'policy'`: it covers both "the human dismissed it" and
+  "it was taken down", and the ambiguous case must never be sold as a refusal.
 - **`reason` is a bounded one-line hint, never the record** — it is capped at 240 characters
   and, for a plan review, is the fixed question rather than the plan body (which is unbounded
   markdown). The full record is the dsh session log's `approval/asked` pair.

@@ -219,6 +219,7 @@ describe('the listing prose', () => {
       age_ms: 900_000,
       pending_asks: 0,
       pending_ask_details: [],
+      human_decisions_count: 0,
       ...overrides,
     }
   }
@@ -261,6 +262,7 @@ describe('projectSessions', () => {
         lastActivityAt: now - 120_000,
         pendingAsks: 0,
         pendingAskDetails: [],
+        recentAsks: [],
       },
     ], now)
 

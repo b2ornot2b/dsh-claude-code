@@ -58,6 +58,110 @@ export type CcPendingAskKind = 'permission' | 'question' | 'plan'
 export const CC_PENDING_ASK_KINDS: readonly CcPendingAskKind[] = ['permission', 'question', 'plan']
 
 /**
+ * HOW an ask ended. Every member maps to a settle path that exists in this
+ * package; nothing here is aspirational.
+ *
+ * | outcome | produced by |
+ * |---|---|
+ * | `allowed` | `ApprovalOutcome === 'allowed-once'`, a plan `Approve`, or the stored rule cache |
+ * | `rejected` | `ApprovalOutcome === 'rejected'`, or a plan declined with `Keep planning` |
+ * | `cancelled` | the prompt was dismissed or withdrawn (SDK abort, session close, `ASK_CANCELLED`) |
+ * | `answered` | a clarifying question came back with selections/custom text (or the `first-option` fallback produced them) |
+ * | `timed-out` | `ask.timeoutMs` / `ask.delegatedTimeoutMs` elapsed |
+ * | `fallback-denied` | the fallback policy denied (`deny` / `error`, or `first-option` with nothing to pick) |
+ * | `unavailable` | nobody could be asked at all: no target, no seam, the approval seam answered `'unavailable'`, or the channel threw |
+ */
+export type CcAskOutcome =
+  | 'allowed'
+  | 'rejected'
+  | 'cancelled'
+  | 'answered'
+  | 'timed-out'
+  | 'fallback-denied'
+  | 'unavailable'
+
+/** Every {@link CcAskOutcome}, for schema declaration and validation. */
+export const CC_ASK_OUTCOMES: readonly CcAskOutcome[] = [
+  'allowed', 'rejected', 'cancelled', 'answered', 'timed-out', 'fallback-denied', 'unavailable',
+]
+
+/**
+ * WHO settled an ask — the distinction a delegating agent could not previously
+ * make, and the reason this whole receipt exists.
+ *
+ * - `human` — a dsh answerer came back with a decision: a person clicked
+ *   approve/reject in the dsh UI, chose an option, typed custom text, approved
+ *   or declined a plan, or dismissed the prompt to speak instead.
+ * - `policy` — nobody was asked, or nobody answered: the stored rule cache, the
+ *   fallback policy, a timeout, an SDK withdrawal, the session closing, or a
+ *   composition with no approval/user-questions seam mounted.
+ *
+ * A consumer MUST NOT report a `policy` settle as a human's decision. In the
+ * production trace that motivated this file, an agent reported a fail-closed
+ * policy deny as "the human denied it" and a human answer as "the session chose
+ * for itself"; both are the same missing bit.
+ */
+export type CcAskSource = 'human' | 'policy'
+
+/** Every {@link CcAskSource}. */
+export const CC_ASK_SOURCES: readonly CcAskSource[] = ['human', 'policy']
+
+/**
+ * One SETTLED ask, retained after the fact: the receipt for a decision.
+ *
+ * `CcPendingAsk` answers "what is a human being asked right now"; this answers
+ * "what did a human (or a policy) actually decide". Without it a delegating
+ * agent sees a tool call happen — or not happen — and has no way to tell an
+ * approval a person granted from one a rule cache granted, a plan a person
+ * approved from a plan mode that never engaged, or an option a person picked
+ * from one the model invented.
+ */
+export interface CcAskReceipt {
+  /** What the human was asked to do. */
+  readonly kind: CcPendingAskKind
+  /** The tool that was decided, when the ask named one. */
+  readonly toolName?: string
+  /** The same one-line description the human was shown, when there was one. */
+  readonly reason?: string
+  /** How it ended. */
+  readonly outcome: CcAskOutcome
+  /**
+   * The human's actual choice, where one exists: the selected option label(s)
+   * or custom text for a question, the decline feedback for a plan, or — for a
+   * `policy` settle — which policy answered and why. ABSENT for a plain
+   * allow/deny that carries no extra words.
+   */
+  readonly detail?: string
+  /** `Date.now()` when the ask was opened. */
+  readonly askedAt: number
+  /** `Date.now()` when it settled. Per-turn filtering reads this. */
+  readonly settledAt: number
+  /** Who settled it. */
+  readonly source: CcAskSource
+}
+
+/**
+ * A decision PLUS what a receipt needs to describe it.
+ *
+ * The table knows when an ask settled and what the SDK was answered with; only
+ * the caller knows whether a person decided it and what they chose. So `work`
+ * (and `onTimeout`) may return this richer shape instead of a bare
+ * {@link CcPermissionDecision} — and a bare decision is recorded as `policy`,
+ * because a caller that says nothing about a human must never be reported as
+ * one.
+ */
+export interface CcAskAnswer {
+  /** What the SDK is answered with. */
+  readonly decision: CcPermissionDecision
+  /** How this ask ended. */
+  readonly outcome: CcAskOutcome
+  /** Who decided it. */
+  readonly source: CcAskSource
+  /** The human's choice, or which policy answered. */
+  readonly detail?: string
+}
+
+/**
  * One ask currently awaiting an answer. A value, never a handle.
  *
  * `kind`, `reason` and `since` exist so a consumer can say WHAT is pending
@@ -113,9 +217,11 @@ export interface CcAskRunSpec {
   /**
    * The decision to answer with when the wait elapses. Called at most once, and
    * only on the timeout path — the router applies the fallback policy inside it.
-   * @returns the timeout decision.
+   * @returns the timeout decision, optionally as a {@link CcAskAnswer} so the
+   *   receipt can say WHICH policy answered (a bare decision is recorded as a
+   *   `timed-out` policy settle).
    */
-  onTimeout(): CcPermissionDecision
+  onTimeout(): CcPermissionDecision | CcAskAnswer
 }
 
 /** Construction-time knobs. */
@@ -128,6 +234,17 @@ export interface CcAskTableDeps {
    * Defaults to 512.
    */
   readonly retain?: number
+  /**
+   * How many settled-ask RECEIPTS to keep for consumers to read
+   * ({@link CcAskTable.receipts}). Defaults to {@link DEFAULT_RECEIPT_LIMIT}.
+   *
+   * Deliberately much smaller than {@link CcAskTableDeps.retain}: retained
+   * DECISIONS exist so a redelivered `requestId` gets the same answer, whereas
+   * receipts are a human-readable tail a model reads in a tool result. Twenty
+   * covers "what happened during this turn" with room to spare, and the bound
+   * is what keeps a long-lived session from growing a transcript in memory.
+   */
+  readonly receiptLimit?: number
   /**
    * Observer for settled asks (tests and, later, metrics).
    * @param requestId - the settled ask.
@@ -147,6 +264,26 @@ export const ASK_SESSION_CLOSED_MESSAGE
 const DEFAULT_RETAIN = 512
 
 /**
+ * Default size of the settled-ask receipt ring: the last twenty asks of a
+ * session, newest last, oldest evicted.
+ *
+ * A ring rather than a log because this is READ, not stored: a consumer wants
+ * "what did a human decide during this turn", and a turn that settles more than
+ * twenty asks has already told the reader everything it can absorb. The bound
+ * also means a week-long session cannot accumulate an unbounded audit trail in
+ * memory — the durable record is the dsh session log (§8.3), not this.
+ */
+export const DEFAULT_RECEIPT_LIMIT = 20
+
+/** Receipt `detail` for an ask the SDK withdrew before anyone answered. */
+export const ASK_WITHDRAWN_DETAIL
+  = 'Claude Code withdrew the request before anyone answered it; no human was involved'
+
+/** Receipt `detail` for an ask the session outlived. */
+export const ASK_SESSION_CLOSED_DETAIL
+  = 'the Claude Code session closed while this ask was still waiting; no human answered it'
+
+/**
  * The largest delay `setTimeout` can express. Anything past it is clamped by
  * Node to **1ms** (with a `TimeoutOverflowWarning`), which would turn an
  * absurdly long configured wait into an instant fallback deny — the exact
@@ -154,6 +291,44 @@ const DEFAULT_RETAIN = 512
  * "effectively never" for a session, and it is at least the right direction.
  */
 const MAX_TIMER_MS = 2_147_483_647
+
+/**
+ * Normalize whatever a caller returned into a receipted answer.
+ *
+ * A bare {@link CcPermissionDecision} carries no claim about a human, so it is
+ * recorded as `policy` — the safe direction. Reporting an unattributed allow as
+ * "a human approved it" is precisely the lie these receipts exist to stop; the
+ * reverse (a human decision under-reported as policy) is merely uninformative.
+ *
+ * @param value - the decision, or the richer answer.
+ * @param bare - the outcome to record for a bare DENY (a bare allow is always
+ *   `allowed`). Defaults to `fallback-denied`.
+ * @returns the answer to settle with.
+ */
+function toAnswer(
+  value: CcPermissionDecision | CcAskAnswer,
+  bare: CcAskOutcome = 'fallback-denied',
+): CcAskAnswer {
+  if (!('behavior' in value)) return value
+  return {
+    decision: value,
+    outcome: value.behavior === 'allow' ? 'allowed' : bare,
+    source: 'policy',
+  }
+}
+
+/**
+ * The answer for an ask the SDK withdrew.
+ * @returns the deny, receipted as a policy cancellation.
+ */
+function withdrawn(): CcAskAnswer {
+  return {
+    decision: { behavior: 'deny', message: ASK_WITHDRAWN_MESSAGE },
+    outcome: 'cancelled',
+    source: 'policy',
+    detail: ASK_WITHDRAWN_DETAIL,
+  }
+}
 
 /** One tracked ask. */
 interface AskEntry {
@@ -181,17 +356,21 @@ interface AskEntry {
 export class CcAskTable {
   readonly #deps: CcAskTableDeps
   readonly #retain: number
+  readonly #receiptLimit: number
   /** In-flight asks, by `requestId`. */
   readonly #open = new Map<string, AskEntry>()
   /** Settled decisions, by `requestId`, insertion-ordered for FIFO eviction. */
   readonly #settled = new Map<string, CcPermissionDecision>()
+  /** The bounded receipt ring, oldest first (newest last). */
+  readonly #receipts: CcAskReceipt[] = []
 
   /**
-   * @param deps - logger, retention bound, settle observer.
+   * @param deps - logger, retention bound, receipt bound, settle observer.
    */
   constructor(deps: CcAskTableDeps = {}) {
     this.#deps = deps
     this.#retain = deps.retain ?? DEFAULT_RETAIN
+    this.#receiptLimit = Math.max(0, deps.receiptLimit ?? DEFAULT_RECEIPT_LIMIT)
   }
 
   /** How many asks are awaiting an answer right now (snapshots report this). */
@@ -208,17 +387,39 @@ export class CcAskTable {
   }
 
   /**
+   * The asks that have SETTLED, newest last, bounded by
+   * {@link CcAskTableDeps.receiptLimit}.
+   * @returns a fresh array of receipts (never a live view).
+   */
+  receipts(): readonly CcAskReceipt[] {
+    return [...this.#receipts]
+  }
+
+  /**
+   * The receipts for asks that settled at or after `since` — how a consumer
+   * asks "what did a human decide during THIS turn" without the table needing
+   * to know what a turn is.
+   * @param since - epoch ms; receipts with `settledAt >= since` are returned.
+   * @returns the matching receipts, newest last.
+   */
+  receiptsSince(since: number): readonly CcAskReceipt[] {
+    return this.#receipts.filter(receipt => receipt.settledAt >= since)
+  }
+
+  /**
    * Run one ask, or join the one already running under this `requestId`.
    *
    * @param spec - the request identity, signal and deadline.
    * @param work - performs the dsh-side ask. It receives a DERIVED signal that
    *   is aborted on timeout and on session close as well as on the SDK's own
-   *   abort, so a dsh seam always learns that the question went away.
+   *   abort, so a dsh seam always learns that the question went away. It may
+   *   return a {@link CcAskAnswer} to say who decided and what they chose; a
+   *   bare decision is receipted as a `policy` settle.
    * @returns the decision — always a decision; this never rejects.
    */
   async run(
     spec: CcAskRunSpec,
-    work: (signal: AbortSignal) => Promise<CcPermissionDecision>,
+    work: (signal: AbortSignal) => Promise<CcPermissionDecision | CcAskAnswer>,
   ): Promise<CcPermissionDecision> {
     const already = this.#settled.get(spec.requestId)
     if (already !== undefined) {
@@ -257,7 +458,17 @@ export class CcAskTable {
    */
   settleAll(message: string = ASK_SESSION_CLOSED_MESSAGE): number {
     const ids = [...this.#open.keys()]
-    for (const id of ids) this.settle(id, { behavior: 'deny', message }, 'closed')
+    for (const id of ids) {
+      this.settle(id, {
+        decision: { behavior: 'deny', message },
+        // Nobody decided this: the session went away underneath a question a
+        // person may still have been reading. Reporting it as a human's denial
+        // would be the exact confusion these receipts exist to prevent.
+        outcome: 'cancelled',
+        source: 'policy',
+        detail: ASK_SESSION_CLOSED_DETAIL,
+      }, 'closed')
+    }
     return ids.length
   }
 
@@ -304,20 +515,25 @@ export class CcAskTable {
         // A throwing policy is contained here: an exception raised inside a
         // timer callback is UNCATCHABLE by the caller, and it would leave the
         // ask pending forever with the process already on fire.
-        let decision: CcPermissionDecision
+        let answer: CcAskAnswer
         try {
-          decision = spec.onTimeout()
+          answer = toAnswer(spec.onTimeout(), 'timed-out')
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error)
           this.#deps.logger?.debug(
             `claude-code ask: the timeout policy for request ${spec.requestId} (${spec.toolName}) threw: ${detail}`)
-          decision = {
-            behavior: 'deny',
-            message: `Denied: the dsh ask channel failed while timing out ${spec.toolName} (${detail}). `
-              + 'Nothing was executed.',
+          answer = {
+            decision: {
+              behavior: 'deny',
+              message: `Denied: the dsh ask channel failed while timing out ${spec.toolName} (${detail}). `
+                + 'Nothing was executed.',
+            },
+            outcome: 'unavailable',
+            source: 'policy',
+            detail: `the dsh ask channel failed while timing this ask out: ${detail}`,
           }
         }
-        this.settle(spec.requestId, decision, 'timeout')
+        this.settle(spec.requestId, answer, 'timeout')
       }, delay)
       // A pending ask must never hold the process open by itself.
       timer.unref?.()
@@ -344,11 +560,11 @@ export class CcAskTable {
     if (signal === undefined || entry.signals.has(signal)) return
     entry.signals.add(signal)
     if (signal.aborted) {
-      this.settle(spec.requestId, { behavior: 'deny', message: ASK_WITHDRAWN_MESSAGE }, 'abort')
+      this.settle(spec.requestId, withdrawn(), 'abort')
       return
     }
     const onAbort = (): void => {
-      this.settle(spec.requestId, { behavior: 'deny', message: ASK_WITHDRAWN_MESSAGE }, 'abort')
+      this.settle(spec.requestId, withdrawn(), 'abort')
     }
     signal.addEventListener('abort', onAbort, { once: true })
     entry.teardown.push(() => { signal.removeEventListener('abort', onAbort) })
@@ -369,18 +585,24 @@ export class CcAskTable {
   private async pump(
     spec: CcAskRunSpec,
     entry: AskEntry,
-    work: (signal: AbortSignal) => Promise<CcPermissionDecision>,
+    work: (signal: AbortSignal) => Promise<CcPermissionDecision | CcAskAnswer>,
   ): Promise<void> {
     try {
-      const decision = await work(entry.controller.signal)
-      this.settle(spec.requestId, decision, 'answered')
+      const answered = await work(entry.controller.signal)
+      this.settle(spec.requestId, toAnswer(answered), 'answered')
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
       this.#deps.logger?.debug(
         `claude-code ask: request ${spec.requestId} (${spec.toolName}) failed unexpectedly: ${detail}`)
       this.settle(spec.requestId, {
-        behavior: 'deny',
-        message: `Denied: the dsh ask channel failed while deciding ${spec.toolName} (${detail}). Nothing was executed.`,
+        decision: {
+          behavior: 'deny',
+          message: `Denied: the dsh ask channel failed while deciding ${spec.toolName} (${detail}). `
+            + 'Nothing was executed.',
+        },
+        outcome: 'unavailable',
+        source: 'policy',
+        detail: `the dsh ask channel failed while deciding this ask: ${detail}`,
       }, 'failed')
     }
   }
@@ -391,14 +613,14 @@ export class CcAskTable {
    * its own side, so both agree without coordinating.
    *
    * @param requestId - the ask to settle.
-   * @param decision - the answer to hand the SDK.
+   * @param answer - the answer to hand the SDK, plus who decided it.
    * @param cause - why it settled.
    * @returns nothing.
    */
-  private settle(requestId: string, decision: CcPermissionDecision, cause: CcAskSettleCause): void {
+  private settle(requestId: string, answer: CcAskAnswer, cause: CcAskSettleCause): void {
     const entry = this.#open.get(requestId)
     if (entry === undefined || entry.settled !== undefined) return
-    entry.settled = decision
+    entry.settled = answer.decision
     for (const off of entry.teardown) off()
     entry.teardown.length = 0
     // Abort AFTER recording the decision: a dsh seam still waiting on an
@@ -406,9 +628,34 @@ export class CcAskTable {
     // an already-settled entry.
     if (cause !== 'answered') entry.controller.abort()
     this.#open.delete(requestId)
-    this.remember(requestId, decision)
-    entry.resolve(decision)
+    this.remember(requestId, answer.decision)
+    // The receipt is written from the SETTLING answer, never re-derived later:
+    // a second (discarded) answer racing this one must not rewrite the record
+    // of what actually decided the ask.
+    this.receipt(entry.pending, answer)
+    entry.resolve(answer.decision)
     this.#deps.onSettle?.(requestId, cause)
+  }
+
+  /**
+   * Append one receipt to the bounded ring, evicting the oldest past the bound.
+   * @param pending - the ask as it was posed (kind, tool, reason, opened-at).
+   * @param answer - how it settled.
+   * @returns nothing.
+   */
+  private receipt(pending: CcPendingAsk, answer: CcAskAnswer): void {
+    if (this.#receiptLimit === 0) return
+    this.#receipts.push({
+      kind: pending.kind,
+      ...(pending.toolName === '' ? {} : { toolName: pending.toolName }),
+      ...(pending.reason === undefined ? {} : { reason: pending.reason }),
+      outcome: answer.outcome,
+      ...(answer.detail === undefined || answer.detail === '' ? {} : { detail: answer.detail }),
+      askedAt: pending.since,
+      settledAt: Date.now(),
+      source: answer.source,
+    })
+    while (this.#receipts.length > this.#receiptLimit) this.#receipts.shift()
   }
 
   /**

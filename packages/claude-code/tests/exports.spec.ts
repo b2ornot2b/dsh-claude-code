@@ -18,9 +18,13 @@ function unwrapExports(exports: unknown): unknown {
 /** Every runtime (value) export of the package entry, pinned by docs/phase1-api-contract.md. */
 const RUNTIME_EXPORTS = [
   'ASK_FALLBACKS',
+  'ASK_SESSION_CLOSED_DETAIL',
   'ASK_SESSION_CLOSED_MESSAGE',
+  'ASK_WITHDRAWN_DETAIL',
   'ASK_WITHDRAWN_MESSAGE',
   'CC_ASK_ERROR_CODES',
+  'CC_ASK_OUTCOMES',
+  'CC_ASK_SOURCES',
   'CC_ASK_USER_QUESTION',
   'CC_AUTH_MODES',
   'CC_CLOSE_REASONS',
@@ -61,6 +65,7 @@ const RUNTIME_EXPORTS = [
   'DEFAULT_API_KEY_REF',
   'DEFAULT_DELEGATED_ASK_TIMEOUT_MS',
   'DEFAULT_MAX_CONCURRENT_SESSIONS',
+  'DEFAULT_RECEIPT_LIMIT',
   'WarmPool',
   'apply',
   'applyAskFallback',

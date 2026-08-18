@@ -365,6 +365,8 @@ interface CcSessionSnapshot {
   readonly model?: string                 // ABSENT until the SDK reports one
   readonly pendingAsks: number
   readonly pendingAskDetails: readonly CcPendingAsk[]   // WHAT is pending; [] when nothing is
+  readonly recentAsks: readonly CcAskReceipt[]          // what was DECIDED and by whom; [] when nothing settled
+  readonly turnStartedAt?: number                       // epoch ms; ABSENT until the first send
   readonly contextUsage?: CcContextUsage
 }
 
@@ -419,6 +421,8 @@ class CcSession {
   get status(): CcSessionStatus        // 'starting' -> 'idle' <-> 'running' -> 'closed'
   get pendingAsks(): number            // asks awaiting an answer (Phase 4); 0 without an ask channel
   get pendingAskDetails(): readonly CcPendingAsk[]   // kind/tool/reason/since; [] without an ask channel
+  get recentAsks(): readonly CcAskReceipt[]         // what was DECIDED and by whom (§4.6b); [] without an ask channel
+  get turnStartedAt(): number | undefined           // epoch ms the current/most recent turn began
   get lastAskError(): ClaudeCodeError | undefined   // Phase 4, ask.fallback: 'error' only
   get capabilities(): readonly string[]        // from the LATEST system/init — feature-detect on these
   get initializeResult(): CcInitializeResult | undefined   // commands, models, account, output_style
@@ -709,6 +713,8 @@ class CcAskRouter {
   get table(): CcAskTable
   get pendingAsks(): number
   get pendingAskDetails(): readonly CcPendingAsk[]
+  get recentAsks(): readonly CcAskReceipt[]  // what was DECIDED, newest last (§4.6b)
+  recentAsksSince(since: number): readonly CcAskReceipt[]
   get target(): CcAskTarget | undefined
   attachTarget(target: CcAskTarget): () => void
   attachCallSite(site: CcAskCallSite): () => void
@@ -848,15 +854,25 @@ Copied verbatim from `@deepseek-ai/dsh-plan-mode`'s own convention:
 
 ```ts
 class CcAskTable {
-  constructor(deps?: CcAskTableDeps)          // { logger?, retain? = 512, onSettle? }
+  constructor(deps?: CcAskTableDeps)          // { logger?, retain? = 512, receiptLimit? = 20, onSettle? }
   get pendingCount(): number
   pending(): readonly CcPendingAsk[]          // { requestId, kind, toolName, reason?, since, startedAt }
-  run(spec: CcAskRunSpec, work: (signal: AbortSignal) => Promise<CcPermissionDecision>): Promise<CcPermissionDecision>
+  receipts(): readonly CcAskReceipt[]         // SETTLED asks, newest last, bounded
+  receiptsSince(since: number): readonly CcAskReceipt[]   // one turn's worth
+  run(
+    spec: CcAskRunSpec,
+    work: (signal: AbortSignal) => Promise<CcPermissionDecision | CcAskAnswer>,
+  ): Promise<CcPermissionDecision>
   settleAll(message?: string): number
 }
 const ASK_WITHDRAWN_MESSAGE: 'Request withdrawn'
 const ASK_SESSION_CLOSED_MESSAGE: string
+const ASK_WITHDRAWN_DETAIL: string            // the receipt's own wording
+const ASK_SESSION_CLOSED_DETAIL: string
 const CC_PENDING_ASK_KINDS: readonly CcPendingAskKind[]   // 'permission' | 'question' | 'plan'
+const CC_ASK_OUTCOMES: readonly CcAskOutcome[]
+const CC_ASK_SOURCES: readonly CcAskSource[]              // 'human' | 'policy'
+const DEFAULT_RECEIPT_LIMIT: 20
 ```
 
 `CcAskRunSpec` gained two OPTIONAL fields, `kind` (default `'permission'`) and
@@ -894,6 +910,79 @@ zero-length one). A configured wait past the 32-bit `setTimeout` ceiling
 into a deny: an exception raised inside a timer callback cannot be caught by the
 caller and would leave the ask pending forever.
 `CcSession.close()` calls `settleAll()` FIRST (§5.4), before the query goes away.
+
+#### Settled-ask receipts (§4.6b)
+
+A pending ask is visible. A SETTLED one used to vanish, and that absence made a
+delegating agent misgrade a working integration: with nothing saying a person had
+acted, "a human chose hola" and "Claude invented hola" were the same observation,
+a human's rejection was reported as a broken deny path, and a human's plan
+approval was reported as "plan mode never engaged". So every settle now leaves a
+receipt in a bounded per-session ring (last **20**, oldest evicted):
+
+```ts
+interface CcAskReceipt {
+  readonly kind: 'permission' | 'question' | 'plan'
+  readonly toolName?: string
+  readonly reason?: string          // the same words the human was shown
+  readonly outcome: CcAskOutcome
+  readonly detail?: string          // the human's choice, or which policy answered
+  readonly askedAt: number          // epoch ms
+  readonly settledAt: number        // epoch ms — per-turn filtering reads this
+  readonly source: 'human' | 'policy'
+}
+
+type CcAskOutcome =
+  | 'allowed' | 'rejected' | 'cancelled' | 'answered'
+  | 'timed-out' | 'fallback-denied' | 'unavailable'
+
+interface CcAskAnswer {             // what a `work` function may return instead of a decision
+  readonly decision: CcPermissionDecision
+  readonly outcome: CcAskOutcome
+  readonly source: CcAskSource
+  readonly detail?: string
+}
+```
+
+**`source` is the point of the whole record.** Every settle path is classified,
+and the classification is deliberately conservative — a bare
+`CcPermissionDecision` returned by any caller is receipted as `policy`, because
+under-reporting a human is merely uninformative while inventing one is the exact
+defect this exists to prevent:
+
+| settle path | outcome | source |
+|---|---|---|
+| `ApprovalOutcome: 'allowed-once'` | `allowed` | `human` |
+| `ApprovalOutcome: 'rejected'` (incl. the `policy: 'never'` fold) | `rejected` | `human` |
+| `ApprovalOutcome: 'cancelled'` | `cancelled` | `policy` — one word covers "the human closed it" and "it was taken down"; the ambiguous case is never sold as a refusal |
+| question answered (selections and/or custom text) | `answered` | `human`, `detail` = what they chose |
+| plan `Approve` | `allowed` | `human` |
+| plan `Keep planning` | `rejected` | `human`, `detail` = their feedback |
+| plan review dismissed (`ASK_CANCELLED`) | `cancelled` | `human` |
+| stored always-allow rule cache | `allowed` | `policy` |
+| no ask target / no seam mounted / `approval.request()` threw | `unavailable` | `policy` |
+| `ask.timeoutMs` elapsed | `timed-out` (or `answered` when `first-option` picked) | `policy` |
+| fallback deny (`deny` / `error` policy, question-error reasons) | `fallback-denied` | `policy` |
+| SDK withdrawal (`signal` aborted) | `cancelled` | `policy` |
+| session close drain | `cancelled` | `policy` |
+
+The ring is bounded because it is READ, not stored: the durable audit record is
+the dsh session log (§8.3), and a week-long session must not accumulate a
+transcript in memory. `CcAskRouter` exposes `recentAsks` and
+`recentAsksSince(since)`; `CcSession` and `CcSessionSnapshot` carry `recentAsks`
+next to `pendingAskDetails`, and a CLOSED session keeps its receipts because
+`entomb()` stores the actor's final snapshot.
+
+One receipt per SETTLE, never per delivery. A redelivered `requestId` (delta S12)
+is answered from the settled table or attached to the ask already in flight, so
+one `reinitialize()` storm leaves one record rather than telling a reader the
+human was asked three times about one tool call; and a late answer racing a
+timeout or an abort is discarded rather than rewriting the receipt that describes
+the decision the SDK actually acted on (a human clicking approve after the
+fallback already denied did NOT allow that call, and must not be recorded as
+having done so). The table is per SESSION ACTOR, so a forked or resumed session
+begins with an empty ring — it inherits the parent's transcript, never its
+approvals.
 
 #### The fallback policy (§4.5)
 
@@ -964,11 +1053,11 @@ SEVEN tools (Phase 8 added `claude_code_list`), all bodies live.
 
 | Tool | Args | Canonical return |
 |---|---|---|
-| `claude_code_open` | `cwd`, `prompt?`, `model?`, `permission_mode?`, `resume?`, `fork?`, `background?` | `{ kind: 'session', session_id, status, result?, usage?, cost_usd?, pending_asks?, pending_ask_details? }` **or** `{ kind: 'background', jobId, ccSessionId }` |
+| `claude_code_open` | `cwd`, `prompt?`, `model?`, `permission_mode?`, `resume?`, `fork?`, `background?` | `{ kind: 'session', session_id, status, result?, usage?, cost_usd?, human_decisions?, pending_asks?, pending_ask_details? }` **or** `{ kind: 'background', jobId, ccSessionId }` |
 | `claude_code_send` | `session_id`, `message`, `mode: 'followup'\|'steer'` | `{ status }` |
-| `claude_code_wait` | `session_id`, `timeout_ms?` | `{ status, result?, usage?, cost_usd? }` **or**, when the wait elapsed, `{ status: 'running', session_id, pending_asks, pending_ask_details }` |
-| `claude_code_status` | `session_id` | `{ status, close_reason?, pending_asks, pending_ask_details, context_usage? }` |
-| `claude_code_list` | `include_closed?` | `{ sessions: [{ session_id, status, cwd, model?, age_ms, pending_asks, pending_ask_details[], close_reason? }] }` — sorted best-close-candidate first (§4.4g) |
+| `claude_code_wait` | `session_id`, `timeout_ms?` | `{ status, result?, usage?, cost_usd?, human_decisions? }` **or**, when the wait elapsed, `{ status: 'running', session_id, pending_asks, pending_ask_details }` |
+| `claude_code_status` | `session_id` | `{ status, close_reason?, pending_asks, pending_ask_details, human_decisions, context_usage? }` |
+| `claude_code_list` | `include_closed?` | `{ sessions: [{ session_id, status, cwd, model?, age_ms, pending_asks, pending_ask_details[], human_decisions_count, last_human_decision?, close_reason? }] }` — sorted best-close-candidate first (§4.4g) |
 | `claude_code_cancel` | `session_id`, `keep_queued?` | `{ still_queued: string[] }` |
 | `claude_code_close` | `session_id` | `{ closed: true }` |
 
@@ -981,6 +1070,65 @@ all optional and all present only when the wait elapsed with the turn still
 running. `claude_code_status` gained `pending_ask_details`, required and always
 present (empty when nothing pends, so "nothing is pending" is never confused
 with "this build cannot tell you"). Nothing was removed or retyped.
+
+**Schema change (additive only), human decisions.** `claude_code_open` (sync)
+and `claude_code_wait` gained an OPTIONAL `human_decisions` array, present
+whenever the turn COMPLETED — empty included, because "no human was involved" is
+evidence too. `claude_code_status` gained a REQUIRED, always-present
+`human_decisions` (the session's whole receipt ring). `claude_code_list` gained a
+required `human_decisions_count` and an optional `last_human_decision` per row:
+a listing has to stay scannable, and the question it answers is "has anybody been
+deciding things on this session?".
+
+One `human_decisions` shape everywhere:
+
+```jsonc
+{ "kind": "permission" | "question" | "plan",
+  "tool_name": "Bash",                        // optional
+  "reason": "Bash: touch marker2.txt",        // optional; the words the human was shown
+  "outcome": "rejected",                      // CC_ASK_OUTCOMES
+  "decided_by": "human",                      // 'human' | 'policy' — the load-bearing field
+  "detail": "hola",                           // optional; their actual choice, or which policy answered
+  "asked_in_an_earlier_turn": true }          // optional; only on a TURN-scoped list, see below
+```
+
+**Which turn reports an ask that straddles a boundary.** A turn-scoped
+`human_decisions` is filtered on when each ask SETTLED
+(`settledAt >= turnStartedAt`), never on when it was raised. An ask can outlive
+the turn that raised it — an interrupt ends a turn with a permission still on a
+human's screen, the next turn starts, and the person clicks after that. The turn
+it SETTLED in reports it, because the settle is the event with news in it and the
+alternative is a human decision that no tool result ever mentions. Such an entry
+carries `asked_in_an_earlier_turn: true` and renders as `permission for Bash
+(touch marker2.txt), raised during an EARLIER turn — ALLOWED by a human in the
+dsh UI`, so it can never be read as approval of the current turn's work. The flag
+is absent from `claude_code_status`'s session-wide list, which has no one turn to
+be earlier than.
+
+`decided_by` is projected verbatim from `CcAskReceipt.source`, and `output.render`
+states it in prose a model repeats accurately:
+
+```text
+1 human decision this turn:
+  1. permission for Bash (touch marker2.txt) — REJECTED by a human in the dsh UI
+
+1 human decision this turn:
+  1. question (Which greeting?) — answered by a human in the dsh UI: 'hola'
+
+1 ask settled this turn WITHOUT any human decision:
+  1. permission for Bash (rm -rf build) — NOT answered: the ask timed out and was
+     settled by policy — … — NOT a human decision
+```
+
+A mixed turn is headed `N settled asks this turn (X decided by a human, Y settled
+by policy with no human involved):`. The negative case is the one under test: a
+policy settle must NEVER read as a person's decision, or the fix would produce the
+same wrong report from the opposite direction.
+
+`claude_code_cancel`'s render also states `still_queued` unconditionally —
+`cancelled session <id>; still_queued is empty: 0 queued messages survived this
+cancel.` The old render omitted the empty case, and the operator's agent read the
+silence as "no `still_queued` value was returned".
 
 One `pending_ask_details` shape everywhere:
 

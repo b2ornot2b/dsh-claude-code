@@ -31,7 +31,7 @@ import type {
   CcAccountData, CcBackendQuery, CcCanUseTool, CcInitializeResult, CcInterruptReceipt,
   CcPermissionDecision, CcPermissionRequest, CcQueryOptions, CcSdkMessage, CcUuid, QueryBackend,
 } from './backend.ts'
-import type { CcPendingAsk } from './ask/table.ts'
+import type { CcAskReceipt, CcPendingAsk } from './ask/table.ts'
 import type { CcAskCallSite, CcAskTarget } from './ask/types.ts'
 import type { ResolvedClaudeCodeConfig } from './config.ts'
 import { createInputStream } from './input-stream.ts'
@@ -214,6 +214,8 @@ export interface CcAskChannel {
   readonly pendingAsks: number
   /** WHAT is awaiting an answer right now — kind, tool, reason, and since when. */
   readonly pendingAskDetails: readonly CcPendingAsk[]
+  /** What has already been decided — the bounded settled-ask receipts, newest last. */
+  readonly recentAsks: readonly CcAskReceipt[]
   /**
    * Set who answers for this session.
    * @param target - the dsh agent and its optional seam overrides.
@@ -361,6 +363,12 @@ export class CcSession {
    */
   #lastActivityAt = Date.now()
 
+  /**
+   * Epoch ms the current turn started — set when a send moves this session into
+   * `running`, and never cleared. See {@link CcSession.turnStartedAt}.
+   */
+  #turnStartedAt: number | undefined
+
   #status: CcSessionStatus = 'starting'
   #query: CcBackendQuery | undefined
   #pump: Promise<CcCloseReason> | undefined
@@ -466,6 +474,34 @@ export class CcSession {
   }
 
   /**
+   * What has already been DECIDED on this session: the bounded settled-ask
+   * receipts, newest last.
+   *
+   * A pending ask is visible; a settled one used to vanish without trace, and a
+   * delegating agent that cannot see the settle cannot tell a human's answer
+   * from the model's invention, or a human's denial from a policy's. Empty
+   * without an ask channel — such a session denies fail-closed below this layer
+   * and never opens an ask to settle.
+   */
+  get recentAsks(): readonly CcAskReceipt[] {
+    return this.#deps.asks?.recentAsks ?? []
+  }
+
+  /**
+   * Epoch ms the CURRENT (or most recently started) turn began, or undefined
+   * while nothing has ever been sent.
+   *
+   * It is what makes a receipt per-turn filterable: "the human decisions of the
+   * turn I waited on" is `recentAsks` filtered to `settledAt >= turnStartedAt`.
+   * Deliberately NOT reset when a turn ends — a caller reads it AFTER the turn
+   * it waited on completed, and a cleared value would hide exactly the decisions
+   * it is asking about.
+   */
+  get turnStartedAt(): number | undefined {
+    return this.#turnStartedAt
+  }
+
+  /**
    * The last unanswerable-ask failure, when `ask.fallback` is `'error'`.
    *
    * `'error'` denies with `interrupt: true` AND surfaces the failure here (and
@@ -518,6 +554,8 @@ export class CcSession {
       ...(this.#model === undefined ? {} : { model: this.#model }),
       pendingAsks: this.pendingAsks,
       pendingAskDetails: this.pendingAskDetails,
+      recentAsks: this.recentAsks,
+      ...(this.#turnStartedAt === undefined ? {} : { turnStartedAt: this.#turnStartedAt }),
       ...(this.#contextUsage === undefined ? {} : { contextUsage: this.#contextUsage }),
       ...(this.#closeReason === undefined ? {} : { closeReason: this.#closeReason }),
     }
@@ -731,6 +769,12 @@ export class CcSession {
     } else {
       this.#currentBatch = [uuid]
     }
+    // A send that STARTS a turn stamps the turn clock; a followup queued behind
+    // a running turn, and a steer refolded into it, belong to the turn already
+    // in flight and leave it alone. Consumers filter settled-ask receipts on
+    // this, so moving it per message would drop decisions a human made earlier
+    // in the same turn.
+    if (this.#status !== 'running') this.#turnStartedAt = sentAt
     this.#status = 'running'
     return uuid
   }

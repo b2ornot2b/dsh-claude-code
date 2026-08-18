@@ -198,8 +198,10 @@ export class FakeCcSession implements CcAgentSession {
       lastActivityAt: this.#openedAt,
       ...(this.#model === undefined ? {} : { model: this.#model }),
       pendingAsks: 0,
-      // This double never routes an ask, so nothing can ever be pending on it.
+      // This double never routes an ask, so nothing can ever be pending on it —
+      // and nothing can ever have settled on it either.
       pendingAskDetails: [],
+      recentAsks: [],
     }
   }
 

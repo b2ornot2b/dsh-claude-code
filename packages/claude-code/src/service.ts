@@ -683,6 +683,11 @@ function snapshot(record: CcSessionRecord): CcSessionSnapshot {
     // one (a white-box test registration) or its session already drained the
     // table on close. Both are honestly empty, never "unknown".
     pendingAskDetails: [],
+    // Likewise: a record with no actor never settled an ask here. A CLOSED
+    // session keeps its real receipts — `entomb()` stores the actor's FINAL
+    // snapshot, so `claude_code_status` on a session that has ended still
+    // reports what the human decided while it was alive.
+    recentAsks: [],
     ...(record.contextUsage === undefined ? {} : { contextUsage: record.contextUsage }),
   }
 }

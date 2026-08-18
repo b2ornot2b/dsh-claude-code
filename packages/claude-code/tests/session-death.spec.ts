@@ -213,6 +213,7 @@ describe('what a dead subprocess settles', () => {
       canUseTool: async () => await Promise.resolve({ behavior: 'deny' as const, message: 'no' }),
       pendingAsks: 3,
       pendingAskDetails: [],
+      recentAsks: [],
       attachTarget: () => () => {},
       attachCallSite: () => () => {},
       settleAll: (): number => { settled += 1; return 3 },

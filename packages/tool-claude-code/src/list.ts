@@ -28,6 +28,8 @@ import type { CcCloseReason, CcSessionSnapshot, CcSessionStatus } from '@deepsee
 
 import { formatWaiting, PENDING_ASK_DETAILS_SCHEMA, projectPendingAsks, renderPendingAsks } from './pending.ts'
 import type { CcPendingAskProjection } from './pending.ts'
+import { HUMAN_DECISIONS_SCHEMA, projectHumanDecisions, renderLastDecision } from './receipts.ts'
+import type { CcHumanDecisionProjection } from './receipts.ts'
 
 /** One session as `claude_code_list` reports it. */
 export interface CcSessionListEntry {
@@ -45,6 +47,14 @@ export interface CcSessionListEntry {
   readonly pending_asks: number
   /** What those asks are. */
   readonly pending_ask_details: CcPendingAskProjection[]
+  /**
+   * How many asks have SETTLED on this session (bounded by the seam's receipt
+   * ring). A count, not the list: a listing has to stay scannable, and the one
+   * question it answers is "has anybody been deciding things here?".
+   */
+  readonly human_decisions_count: number
+  /** The most recent settled ask, when there is one — who decided, and what. */
+  readonly last_human_decision?: CcHumanDecisionProjection
   /** Why it closed — present only for a closed session, and only with `include_closed`. */
   readonly close_reason?: CcCloseReason
 }
@@ -77,6 +87,17 @@ export const SESSION_LIST_SCHEMA = {
           + 'is mid-decision: do not close this session.',
       },
       pending_ask_details: { ...PENDING_ASK_DETAILS_SCHEMA, required: true },
+      human_decisions_count: {
+        type: 'integer',
+        required: true,
+        description: 'How many asks have been SETTLED on this session (permission approvals, question answers, '
+          + 'plan reviews), bounded by the seam\'s receipt ring. Zero means nobody has decided anything here.',
+      },
+      last_human_decision: {
+        ...HUMAN_DECISIONS_SCHEMA.items,
+        description: 'The most recent settled ask on this session: what it was, how it ended, and whether a '
+          + 'human ("decided_by": "human") or a policy settled it. Call claude_code_status for the full list.',
+      },
       close_reason: {
         type: 'string',
         enum: CC_CLOSE_REASONS,
@@ -107,8 +128,14 @@ export function projectSessions(
   // matters: no session a human is mid-decision on is ever listed first.
   const inventory = buildSessionInventory(sessions, now)
   const closeReasons = new Map(sessions.map(session => [session.id, session.closeReason]))
+  // The inventory entry deliberately carries only what the ORDERING needs; the
+  // receipts come from the snapshots the inventory was built from, keyed by the
+  // same id, so a row can never show one session's decisions against another's.
+  const receipts = new Map(sessions.map(session => [session.id, session.recentAsks]))
   return inventory.map((entry) => {
     const closeReason = closeReasons.get(entry.id)
+    const settled = projectHumanDecisions(receipts.get(entry.id) ?? [])
+    const last = settled[settled.length - 1]
     return {
       session_id: entry.id,
       status: entry.status,
@@ -117,6 +144,8 @@ export function projectSessions(
       age_ms: entry.ageMs,
       pending_asks: entry.pendingAsks,
       pending_ask_details: projectPendingAsks(entry.pendingAskDetails, now),
+      human_decisions_count: settled.length,
+      ...(last === undefined ? {} : { last_human_decision: last }),
       ...(closeReason === undefined ? {} : { close_reason: closeReason }),
     }
   })
@@ -162,9 +191,14 @@ export function renderSessionList(
       + `  open ${formatWaiting(entry.age_ms)}`
       + (entry.model === undefined ? '' : `  ${entry.model}`)
       + `  ${entry.cwd}`
-    return entry.pending_ask_details.length === 0
-      ? head
-      : `${head}\n${renderPendingAsks(entry.pending_ask_details)}`
+    const lines = [head]
+    if (entry.pending_ask_details.length > 0) lines.push(renderPendingAsks(entry.pending_ask_details))
+    // One line, newest decision only: enough for a reader to see that a person
+    // has been answering on this session (or that a policy has been), without
+    // turning the inventory into a transcript.
+    const decided = renderLastDecision(entry.human_decisions_count, entry.last_human_decision)
+    if (decided !== '') lines.push(decided)
+    return lines.join('\n')
   })
   const footer = blocked === 0
     ? 'Sessions holding a slot may belong to OTHER dsh sessions sharing this host service — check the cwd '
