@@ -215,6 +215,13 @@ export class ClaudeCodeAgent implements Agent {
     // transition and the last outbox reconciliation.
     this.scope.ctx.effect(() => {
       const offMessage = this.#cc.onMessage(() => { this.sync() })
+      // The reason is deliberately not read here. `AgentStatus` has exactly two
+      // values and disposal is not a third (D7), so every way a session can end
+      // — asked, exited, crashed — projects onto the same `idle`, releases the
+      // same parked `whenIdle()`, and frees the same maintenance phase. WHY it
+      // ended is a seam-level fact a consumer reads off `snapshot().closeReason`;
+      // inventing an agent-level distinction for it would be a third status by
+      // another name.
       const offClose = this.#cc.onClose(() => {
         this.#closed = true
         this.sync()

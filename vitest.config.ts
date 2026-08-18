@@ -21,7 +21,16 @@ import { defineConfig } from 'vitest/config'
  *   first for exactly this reason, and the spec imports no package VALUE from
  *   either plane so the two never meet in one process.
  *
- * Both projects are offline: no Claude Code session is ever opened.
+ * - `examples` — Stage 2's E2E acceptance spec for `examples/delegation-demo`.
+ *   It imports no package from either plane at all: it spawns `run.mjs` as a
+ *   real Node subprocess (which itself boots a `cordis.yml` through the
+ *   Loader, same as `composition`) and asserts on its exit code and stdout.
+ *   Unlike the other two, this project is NOT offline — every spec in it is
+ *   gated `describe.skipIf(!LIVE)` behind `DSH_CC_LIVE=1`, exactly like the
+ *   `tests/live/` suites under each package.
+ *
+ * `unit` and `composition` are offline: no Claude Code session is ever
+ * opened. `examples` only runs anything when `DSH_CC_LIVE=1` is set.
  */
 export default defineConfig({
   test: {
@@ -42,6 +51,14 @@ export default defineConfig({
           name: 'composition',
           environment: 'node',
           include: ['tests/composition/**/*.spec.ts'],
+          exclude: ['**/node_modules/**', 'spikes/**'],
+        },
+      },
+      {
+        test: {
+          name: 'examples',
+          environment: 'node',
+          include: ['examples/**/*.spec.ts'],
           exclude: ['**/node_modules/**', 'spikes/**'],
         },
       },

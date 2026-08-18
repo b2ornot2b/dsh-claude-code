@@ -27,7 +27,7 @@ describe.skipIf(!LIVE)('CcSession live: resume (DSH_CC_LIVE=1)', () => {
         expect(resultA.message.subtype).toBe('success')
 
         await service.close(snapA.id)
-        expect(service.get(snapA.id)).toBeUndefined()
+        expect(service.session(snapA.id)).toBeUndefined()
 
         const snapB = await service.open({ cwd, resume: snapA.id })
         const sessionB = service.session(snapB.id)

@@ -31,8 +31,8 @@ import { CcSession, resolveQueryOptions } from './session.ts'
 import type { CcSessionDeps } from './session.ts'
 import { ClaudeCodeError, newCcSessionId } from './types.ts'
 import type {
-  CcAccountInfo, CcContextUsage, CcLogger, CcOpenOptions, CcSessionId, CcSessionSnapshot,
-  CcSessionStatus, ClaudeCode,
+  CcAccountInfo, CcCloseReason, CcContextUsage, CcLogger, CcOpenOptions, CcSessionId,
+  CcSessionSnapshot, CcSessionStatus, ClaudeCode,
 } from './types.ts'
 
 declare module '@deepseek-ai/cordis' {
@@ -107,6 +107,24 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
 
   /** Live sessions by id, in open order (`Map` preserves insertion order). */
   private readonly sessions = new Map<CcSessionId, CcSessionRecord>()
+
+  /**
+   * The last snapshot of the {@link CLOSED_SESSION_HISTORY} most recently closed
+   * sessions, so {@link ClaudeCodeService.get} can still answer for one.
+   *
+   * A session used to vanish from every lookup the instant it closed, which was
+   * fine while `closed` only ever meant "somebody asked". It no longer does: a
+   * dead subprocess now closes its own session, so the next
+   * `claude_code_status` would answer `CC_NO_SESSION` — "it was never opened
+   * here" — about a session the caller had just been handed the id of. A
+   * tombstone answers the question actually being asked ("what happened to it?")
+   * with `status: 'closed'` and the {@link CcCloseReason}.
+   *
+   * Deliberately NOT visible to {@link ClaudeCodeService.list} (live sessions
+   * only) or {@link ClaudeCodeService.session} (there is nothing to drive), and
+   * bounded, because a tombstone is a courtesy and must not become a leak.
+   */
+  private readonly closed = new Map<CcSessionId, CcSessionSnapshot>()
 
   /** Injectable seams: the SDK boundary, the permission router, the credential hook. */
   private readonly deps: ClaudeCodeServiceDeps
@@ -239,9 +257,12 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
     }
     this.sessions.set(id, record)
     // A session that closes for ANY reason (an explicit close, teardown, a dead
-    // subprocess) drops out of the registry: `list()` reports live sessions only.
-    session.onClose(() => {
+    // subprocess that closed itself) drops out of the registry: `list()` reports
+    // live sessions only. The snapshot is taken here rather than reconstructed
+    // later because this is the last moment the actor still holds it.
+    session.onClose((reason) => {
       if (this.sessions.get(id) === record) this.sessions.delete(id)
+      this.entomb(id, session.snapshot(), reason)
     })
 
     try {
@@ -271,13 +292,22 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
   }
 
   /**
-   * Look up one registered session.
+   * Look up one session: live, or one of the most recently closed.
+   *
+   * A closed session answers from the tombstone table for a bounded while (see
+   * {@link ClaudeCodeService.closed}) — `status: 'closed'` plus the
+   * {@link CcCloseReason} that ended it. That is the difference between telling
+   * a caller "your session crashed" and telling it "no such session", which is
+   * what it used to hear the moment a subprocess died.
+   *
    * @param id - the shared dsh/CC session id.
-   * @returns its snapshot, or `undefined` when no such session is registered here.
+   * @returns its snapshot, or `undefined` when this context never opened it (or
+   *   closed it long enough ago that the tombstone has been evicted).
    */
   get(id: CcSessionId): CcSessionSnapshot | undefined {
     const record = this.sessions.get(id)
-    return record === undefined ? undefined : snapshot(record)
+    if (record !== undefined) return snapshot(record)
+    return this.closed.get(id)
   }
 
   /**
@@ -387,6 +417,29 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
   }
 
   /**
+   * Record one closed session's final snapshot, evicting the oldest tombstone
+   * once the table is full.
+   *
+   * `Map` iteration is insertion order, so the first key IS the oldest entry;
+   * a re-closed id is deleted first so it re-enters as the newest rather than
+   * keeping a stale position (and a stale reason).
+   *
+   * @param id - the closed session's id.
+   * @param final - the actor's snapshot, taken at close time.
+   * @param reason - why it closed.
+   * @returns nothing.
+   */
+  private entomb(id: CcSessionId, final: CcSessionSnapshot, reason: CcCloseReason): void {
+    this.closed.delete(id)
+    this.closed.set(id, { ...final, status: 'closed', closeReason: final.closeReason ?? reason })
+    while (this.closed.size > CLOSED_SESSION_HISTORY) {
+      const oldest = this.closed.keys().next()
+      if (oldest.done === true) break
+      this.closed.delete(oldest.value)
+    }
+  }
+
+  /**
    * The two optional dsh seams, resolved LAZILY on every ask.
    *
    * Read through `ctx.get(...)` at ask time rather than captured: a service may
@@ -467,6 +520,14 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
     }
   }
 }
+
+/**
+ * How many closed sessions keep an answerable tombstone (see
+ * {@link ClaudeCodeService.closed}). Small on purpose: it exists so the status
+ * call that FOLLOWS a crash gets a real answer, not so a composition can browse
+ * its history — that is the session log's job.
+ */
+export const CLOSED_SESSION_HISTORY = 32
 
 /**
  * Project one bookkeeping record into the public value shape. Optional fields

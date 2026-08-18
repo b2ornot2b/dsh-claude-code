@@ -123,7 +123,7 @@ describe.skipIf(!LIVE)('claude_code_* tools, live sync path (DSH_CC_LIVE=1)', ()
           'claude_code_close', { session_id: opened.session_id }, { agent: harness.root.agent })
         expect(closeResult.isError, JSON.stringify(closeResult.error)).toBe(false)
         expect(closeResult.value).toEqual({ closed: true })
-        expect(harness.ctx.claudeCode.get(opened.session_id as never)).toBeUndefined()
+        expect(harness.ctx.claudeCode.session(opened.session_id as never)).toBeUndefined()
 
         // Subprocess is really gone (scoped orphan check per D — never a whole-machine count).
         await waitForSessionProcessCount(opened.session_id, 0, 15_000)

@@ -36,7 +36,7 @@ describe.skipIf(!LIVE)('CcSession live: teardown (DSH_CC_LIVE=1)', () => {
         await ctx.fiber.dispose()
 
         expect(session.status).toBe('closed')
-        expect(service.get(snap.id)).toBeUndefined()
+        expect(service.session(snap.id)).toBeUndefined()
 
         // Subprocess exit has a documented ~2s stdin-EOF grace period.
         expect(await waitForSessionProcessCount(snap.id, 0, 15_000)).toBe(0)

@@ -260,7 +260,7 @@ describe('the seam session dying underneath the agent', () => {
     await expect(agent.whenIdle()).resolves.toBeUndefined()
   })
 
-  it('is left running by a subprocess that dies WITHOUT the seam closing (documented gap)', async () => {
+  it('reaches idle when the subprocess dies mid-turn, because the seam closes itself', async () => {
     mounted = await mountSeam()
     const seam = mounted
     const handle = await createClaudeCodeAgent(
@@ -268,22 +268,48 @@ describe('the seam session dying underneath the agent', () => {
     const query = seam.fake.queries[0]
     if (query === undefined) throw new Error('the fake backend built no query')
     expect(handle.agent.status).toBe('running')
+    const idle = handle.agent.whenIdle()
 
     // The subprocess dies: the SDK's iterator completes and the seam's pump
-    // ends. NOTHING calls close(), so the seam's status machine never moves.
+    // ends. The seam now runs its OWN close path (api-contract correction 42's
+    // fix), so everything downstream of a close happens without anyone asking.
     query.endStream()
     await settle()
 
-    // This is the honest current behaviour, pinned so a future seam change that
-    // self-closes on pump death shows up HERE rather than in production.
-    expect(seam.ctx.claudeCode.get(handle.agent.id)?.status).toBe('running')
-    expect(handle.agent.status).toBe('running')
+    // The turn was in flight, so this is a crash, not an orderly exit — and the
+    // snapshot says which. This assertion is the inverse of the Phase 6 probe
+    // that pinned the gap; it was written to fail exactly here when the seam
+    // learned to self-close.
+    expect(seam.ctx.claudeCode.get(handle.agent.id)?.status).toBe('closed')
+    expect(seam.ctx.claudeCode.get(handle.agent.id)?.closeReason).toBe('crashed')
+    expect(handle.agent.status).toBe('idle')
+    // The parked wait settles instead of hanging until disposal's bounded drain.
+    await expect(idle).resolves.toBeUndefined()
+    // And the phase is claimable again, which it was not while status stuck at
+    // `running` — `runMaintenance()` refused every claim.
+    await expect(handle.agent.runMaintenance(async () => {})).resolves.toBeUndefined()
 
-    // The only recovery is disposal, and it is BOUNDED, so unload still works.
+    // Disposal still works, and still promptly: there is nothing left to drain.
     const started = Date.now()
     await handle.dispose()
     expect(Date.now() - started).toBeLessThan(2_000)
     expect(seam.ctx.agents.get(handle.agent.id)).toBeUndefined()
+  })
+
+  it('reports an orderly exit as `exited`, not as a crash, when no turn was in flight', async () => {
+    mounted = await mountSeam()
+    const seam = mounted
+    const handle = await createClaudeCodeAgent(seam.ctx, { cwd: tmpdir() }, { disposeDrainMs: 20 })
+    const query = seam.fake.queries[0]
+    if (query === undefined) throw new Error('the fake backend built no query')
+    expect(handle.agent.status).toBe('idle')
+
+    query.endStream()
+    await settle()
+
+    expect(seam.ctx.claudeCode.get(handle.agent.id)?.closeReason).toBe('exited')
+    expect(handle.agent.status).toBe('idle')
+    await handle.dispose()
   })
 
   it('refuses a cancel against a closed session rather than throwing at the caller', async () => {
@@ -397,7 +423,9 @@ describe('disposal called twice, and at once', () => {
 
     expect(seam.ctx.agents.get(id)).toBeUndefined()
     expect(seam.ctx.sessions.get(id)).toBeUndefined()
-    expect(seam.ctx.claudeCode.get(id)).toBeUndefined()
+    // The live actor is gone; `get()` still answers from the tombstone.
+    expect(seam.ctx.claudeCode.session(id)).toBeUndefined()
+    expect(seam.ctx.claudeCode.get(id)).toMatchObject({ status: 'closed' })
   })
 
   it('emits agent/disposed exactly once across a dispose() and a fiber unload', async () => {

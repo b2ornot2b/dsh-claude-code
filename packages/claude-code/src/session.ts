@@ -38,7 +38,8 @@ import type { CcInputStream } from './input-stream.ts'
 import type { CcWarmLease } from './prewarm.ts'
 import { ClaudeCodeError } from './types.ts'
 import type {
-  CcContextUsage, CcLogger, CcPermissionMode, CcSessionId, CcSessionSnapshot, CcSessionStatus,
+  CcCloseReason, CcContextUsage, CcLogger, CcPermissionMode, CcSessionId, CcSessionSnapshot,
+  CcSessionStatus,
 } from './types.ts'
 
 /**
@@ -163,6 +164,19 @@ export interface CcSendRecord {
  * @param send - what was sent.
  */
 export type CcSendListener = (send: CcSendRecord) => void
+
+/**
+ * A close subscriber.
+ *
+ * It takes the REASON because a session no longer closes only when asked: a
+ * subprocess that exits or dies closes its own session (see
+ * {@link CcSession.close}), and the three consumers that ride this listener —
+ * the service registry, the mirror's finalize, and a background job's
+ * settlement — each need to tell "somebody asked" from "it died mid-turn".
+ *
+ * @param reason - why the session closed.
+ */
+export type CcCloseListener = (reason: CcCloseReason) => void
 
 /** Identity and per-session shape of one `CcSession`. */
 export interface CcSessionOptions {
@@ -328,13 +342,13 @@ export class CcSession {
   /** Resolvers woken by the pump on every turn boundary (used by the drain loop). */
   readonly #turnBoundaryWaiters = new Set<() => void>()
   /** One-shot close subscribers (the service's registry cleanup). */
-  readonly #closeListeners = new Set<() => void>()
+  readonly #closeListeners = new Set<CcCloseListener>()
   /** Subscribers to unanswerable-ask failures. */
   readonly #askErrorListeners = new Set<(error: ClaudeCodeError) => void>()
 
   #status: CcSessionStatus = 'starting'
   #query: CcBackendQuery | undefined
-  #pump: Promise<void> | undefined
+  #pump: Promise<CcCloseReason> | undefined
   #initialize: CcInitializeResult | undefined
   #capabilities: readonly string[] = []
   #initCount = 0
@@ -345,6 +359,8 @@ export class CcSession {
   #lastAskError: ClaudeCodeError | undefined
   #closed = false
   #closing: Promise<void> | undefined
+  /** Why this session closed, once it has. Undefined while it is still live. */
+  #closeReason: CcCloseReason | undefined
   /**
    * Number of `error_during_execution` results still expected as steering
    * artifacts. A counter, not a boolean: two steers in flight produce two.
@@ -384,6 +400,17 @@ export class CcSession {
   /** Lifecycle state: `starting` → `idle` ⇄ `running` → `closed`. */
   get status(): CcSessionStatus {
     return this.#status
+  }
+
+  /**
+   * Why this session closed, or undefined while it is still live.
+   *
+   * `status === 'closed'` alone no longer means somebody asked for it: a dead
+   * subprocess closes its own session now (see {@link CcSession.close}), so this
+   * is what tells a clean exit from a crash.
+   */
+  get closeReason(): CcCloseReason | undefined {
+    return this.#closeReason
   }
 
   /** Permission/question asks awaiting an answer (§4.6). Zero without an ask channel. */
@@ -441,6 +468,7 @@ export class CcSession {
       ...(this.#model === undefined ? {} : { model: this.#model }),
       pendingAsks: this.pendingAsks,
       ...(this.#contextUsage === undefined ? {} : { contextUsage: this.#contextUsage }),
+      ...(this.#closeReason === undefined ? {} : { closeReason: this.#closeReason }),
     }
   }
 
@@ -485,12 +513,16 @@ export class CcSession {
    * including a teardown-driven close). The service uses it to drop the registry
    * entry so a closed session never lingers in `list()`.
    *
-   * @param listener - called after the session reaches `closed`.
+   * Subscribing to an ALREADY closed session runs the listener immediately with
+   * the reason it closed for — the same value it would have received had it
+   * been subscribed in time.
+   *
+   * @param listener - called after the session reaches `closed`, with why.
    * @returns an unsubscribe function.
    */
-  onClose(listener: () => void): () => void {
+  onClose(listener: CcCloseListener): () => void {
     if (this.#closed) {
-      listener()
+      listener(this.#closeReason ?? 'closed')
       return () => {}
     }
     this.#closeListeners.add(listener)
@@ -582,7 +614,13 @@ export class CcSession {
         })
         this.#query = warm.query(this.#input)
       }
-      this.#pump = this.runPump(this.#query)
+      const pump = this.runPump(this.#query)
+      this.#pump = pump
+      // Armed BEFORE the handshake is awaited: a subprocess that dies during
+      // initialization ends the pump too, and the `BACKEND_ERROR` path below
+      // closes with `'closed'` only because it gets there first (`#closing` is
+      // set synchronously by `close()`, which is exactly the guard).
+      this.armSelfClose(pump)
       this.cacheInitialize(await this.#query.initializationResult())
     } catch (error) {
       await this.close()
@@ -769,20 +807,47 @@ export class CcSession {
    * stream ends LAST, because ending it is what finally lets the subprocess
    * exit.
    *
-   * @returns nothing; every waiter has been rejected when it resolves.
+   * **This is also the DEAD-SUBPROCESS path.** When the SDK's message iterator
+   * completes — the subprocess exited, was killed, or its stream threw — the
+   * pump calls this with `'exited'` or `'crashed'` instead of leaving the
+   * session parked in `running` forever. That was the Phase 6 carry-forward
+   * (api-contract correction 42): nothing closed on pump completion, so a dead
+   * subprocess left `CcSession.status` at `running`, `agent.whenIdle()` unsettled,
+   * pending asks held, the mirror's turn dangling and a background job unsettled
+   * until something else happened to call `close()`. Routing pump death through
+   * THIS method — rather than a parallel teardown — is what guarantees the two
+   * paths cannot drift: there is exactly one close sequence, and `reason` is the
+   * only thing that differs.
+   *
+   * @param reason - why the session is closing. Defaults to `'closed'` (somebody
+   *   asked); the pump supplies `'exited'` / `'crashed'`.
+   * @returns nothing; every waiter has been settled when it resolves.
    */
-  async close(): Promise<void> {
+  async close(reason: CcCloseReason = 'closed'): Promise<void> {
     if (this.#closing !== undefined) return await this.#closing
-    this.#closing = this.runClose()
+    // REENTRANCY, not redundancy. `#closing` is assigned only AFTER `runClose()`
+    // has run its whole synchronous prefix — which includes calling every
+    // `onClose` listener — so a listener that closes the session from inside its
+    // own notification would find `#closing` still unset and start a SECOND
+    // close sequence over a half-torn-down session, re-notifying itself and
+    // recursing until the stack ran out (`#closeListeners` is cleared after the
+    // loop, not before it). `#closed` is set on `runClose()`'s first line, so it
+    // is the flag that covers that window. Returning without awaiting is the
+    // only correct answer here: the caller is running INSIDE the close it would
+    // be waiting for.
+    if (this.#closed) return
+    this.#closing = this.runClose(reason)
     return await this.#closing
   }
 
   /**
-   * Settle asks, tear down the query, end the stream, reject every waiter.
+   * Settle asks, tear down the query, end the stream, settle every waiter.
+   * @param reason - why the session is closing.
    * @returns nothing.
    */
-  private async runClose(): Promise<void> {
+  private async runClose(reason: CcCloseReason): Promise<void> {
     this.#closed = true
+    this.#closeReason = reason
     // 1. Settle pending asks — nothing may be left holding a promise the
     //    closed query can never answer (§4.6).
     this.settleAsks()
@@ -796,9 +861,7 @@ export class CcSession {
     this.#input.end()
     this.#status = 'closed'
 
-    const closedError = new ClaudeCodeError(
-      `claude-code: session ${this.id} closed before a result arrived`, 'SESSION_CLOSED')
-    for (const waiter of [...this.#resultWaiters]) waiter.reject(closedError)
+    this.settleWaiters(reason)
     for (const wake of [...this.#turnBoundaryWaiters]) wake()
     this.#turnBoundaryWaiters.clear()
     this.#listeners.clear()
@@ -806,7 +869,7 @@ export class CcSession {
     this.#askErrorListeners.clear()
     for (const listener of [...this.#closeListeners]) {
       try {
-        listener()
+        listener(reason)
       } catch (error) {
         this.#deps.logger?.debug(`claude-code: session ${this.id} close listener threw: ${describe(error)}`)
       }
@@ -820,6 +883,39 @@ export class CcSession {
     } catch (error) {
       this.#deps.logger?.debug(`claude-code: session ${this.id} pump ended with: ${describe(error)}`)
     }
+  }
+
+  /**
+   * Release every parked {@link CcSession.waitForResult} on the close path.
+   *
+   * Every waiter still parked here is FAILED, and that is not a shortcut: a
+   * waiter only ever parks when this session owes it a result it has not
+   * produced. {@link CcSession.waitForResult} hands back `#lastResult`
+   * immediately whenever the session is not `running` and a result exists, and
+   * {@link CcSession.observe} resolves every parked waiter the moment a
+   * non-artifact result lands — so "the last result, if one arrived" is already
+   * answered on those two paths, and by the time close runs, a still-parked
+   * waiter is waiting on a turn that produced nothing.
+   *
+   * Resolving one from cache HERE would be actively wrong: the cached value is
+   * the PREVIOUS turn's answer, and handing it to a caller that asked about the
+   * turn the subprocess died in would attribute stale output to a request that
+   * never completed.
+   *
+   * The reason travels in the message rather than in the code, because the code
+   * is what consumers route on and `SESSION_CLOSED` is the same actionable fact
+   * however the session ended: there is nothing left to wait for. Callers that
+   * need the cause read {@link CcSessionSnapshot.closeReason}.
+   *
+   * @param reason - why the session is closing.
+   * @returns nothing.
+   */
+  private settleWaiters(reason: CcCloseReason): void {
+    const waiters = [...this.#resultWaiters]
+    if (waiters.length === 0) return
+    const closedError = new ClaudeCodeError(
+      `claude-code: session ${this.id} closed before a result arrived (${reason})`, 'SESSION_CLOSED')
+    for (const waiter of waiters) waiter.reject(closedError)
   }
 
   /**
@@ -891,10 +987,17 @@ export class CcSession {
   /**
    * The single consumer of the query's async iterator: fan-out plus the status
    * machine. One loop, owned by the session, awaited by `close()`.
+   *
+   * It resolves with the {@link CcCloseReason} its ending IMPLIES rather than
+   * acting on it, because acting here would deadlock: `runClose()` awaits this
+   * very promise, so a `close()` issued from inside the loop's own continuation
+   * would wait for itself forever. {@link CcSession.armSelfClose} attaches the
+   * close as a `.then` on the settled promise instead.
+   *
    * @param query - the live query handle.
-   * @returns nothing; resolves when the SDK's iterator completes.
+   * @returns why the session should close now that the iterator is done.
    */
-  private async runPump(query: CcBackendQuery): Promise<void> {
+  private async runPump(query: CcBackendQuery): Promise<CcCloseReason> {
     try {
       for await (const message of query) {
         this.observe(message)
@@ -903,7 +1006,58 @@ export class CcSession {
       if (!this.#closed) {
         this.#deps.logger?.debug(`claude-code: session ${this.id} pump failed: ${describe(error)}`)
       }
+      // A throwing iterator is a crash whatever the status machine believed:
+      // the transport is gone, so nothing in flight can still be answered.
+      return 'crashed'
     }
+    // The iterator completed cleanly. Whether that was an orderly end or a kill
+    // is decided by what was in flight: a turn still `running` will never get
+    // the result that would have closed it.
+    return this.#status === 'running' ? 'crashed' : 'exited'
+  }
+
+  /**
+   * Close this session when its pump ends, unless a close is already under way.
+   *
+   * **The `.then` is not a stylistic choice — closing from inside the pump body
+   * deadlocks.** `runClose()` awaits `#pump` (that await is what guarantees no
+   * callback fires after `close()` resolves), so a `close()` issued from within
+   * the loop's own execution would be waiting on the promise it is running
+   * inside. Following the SETTLED promise instead is what makes the same close
+   * sequence reachable from both directions.
+   * `tests/session-death.spec.ts` bounds every case here for exactly that
+   * reason: the in-pump version does not fail an assertion, it hangs.
+   *
+   * The guard makes a second close sequence over a half-torn-down session
+   * impossible: `close()` sets `#closing` before it does anything else, so an
+   * explicit close that is currently awaiting this very pump is already
+   * accounted for by the time the pump resolves.
+   *
+   * Failures are swallowed into the logger on purpose. Nothing awaits this — it
+   * is a detached continuation — so a rejection would become an unhandled one
+   * and take the process down over a subprocess that had already died.
+   *
+   * @param pump - the pump promise to follow.
+   * @returns nothing.
+   */
+  private armSelfClose(pump: Promise<CcCloseReason>): void {
+    void pump.then(
+      async (reason) => {
+        if (this.#closing !== undefined) return
+        this.#deps.logger?.debug(
+          `claude-code: session ${this.id} pump ended (${reason}); closing the session`)
+        await this.close(reason)
+      },
+      () => {
+        // `runPump` catches everything it iterates; a rejection here would mean
+        // the pump's own bookkeeping threw, which is still a dead session.
+        if (this.#closing !== undefined) return undefined
+        return this.close('crashed')
+      },
+    ).catch((error: unknown) => {
+      this.#deps.logger?.debug(
+        `claude-code: session ${this.id} self-close failed: ${describe(error)}`)
+    })
   }
 
   /**

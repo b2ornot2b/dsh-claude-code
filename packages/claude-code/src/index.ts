@@ -44,6 +44,9 @@ export type {
   CcApprovalSeam, CcAskCallSite, CcAskServices, CcAskTarget, CcUserQuestionsSeam,
 } from './ask/types.ts'
 
+export { presentCcToolCall, presentCcToolResult } from './cards.ts'
+export type { CcToolOutcome } from './cards.ts'
+
 export { realBackend } from './backend.ts'
 export type {
   CcAccountData,
@@ -101,6 +104,7 @@ export type { CcWarmLease, WarmPoolDeps } from './prewarm.ts'
 export { buildSessionEnv, CcSession, resolveQueryOptions } from './session.ts'
 export type {
   CcAskChannel,
+  CcCloseListener,
   CcInterruptOptions,
   CcInterruptOutcome,
   CcMessageEnvelope,
@@ -117,12 +121,13 @@ export type {
   CcSessionOptions,
 } from './session.ts'
 
-export { apply, ClaudeCodeService, inject, name } from './service.ts'
+export { apply, CLOSED_SESSION_HISTORY, ClaudeCodeService, inject, name } from './service.ts'
 export type { ClaudeCodeServiceDeps } from './service.ts'
 
 export {
   ASK_FALLBACKS,
   CC_AUTH_MODES,
+  CC_CLOSE_REASONS,
   CC_PERMISSION_MODES,
   CC_SESSION_STATUSES,
   CC_SETTING_SOURCES,
@@ -134,6 +139,7 @@ export type {
   AskFallback,
   CcAccountInfo,
   CcAuthMode,
+  CcCloseReason,
   CcContextUsage,
   CcErrorCode,
   CcLogger,

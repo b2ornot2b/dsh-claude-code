@@ -38,16 +38,25 @@ describe.skipIf(!LIVE)('CcSession live: prewarm (DSH_CC_LIVE=1)', () => {
         expect(spy.queryCount).toBe(1)
         await service.close(snapA.id)
 
-        // `spy.startupCount` increments the MOMENT `backend.startup()` is
-        // invoked, not once the real subprocess finishes initializing and the
-        // pool actually stores the lease (`this.#held`) — so wait for the
-        // call, then give the real spawn+init handshake (spike 5: ~300ms)
-        // room to complete before relying on the pool actually holding it.
-        await waitUntil(() => spy.startupCount, count => count >= 1, 30_000, 200)
+        // Wait for the pre-warm to SETTLE, not merely to be invoked.
+        // `spy.startupCount` flips the moment `backend.startup()` is called;
+        // the pool stores the lease (`this.#held`) only once that promise
+        // resolves, one line later in `startWarm()`. Stage 3 found this spec
+        // waiting on the invocation count and then sleeping a flat 2s to cover
+        // the real spawn + initialize handshake — which is a fixed budget
+        // racing a live subprocess, and it lost under a fully parallel sweep
+        // (session B opened cold and got a fresh id). The handshake is ~300ms
+        // in isolation and unbounded under load, so the barrier has to be the
+        // event itself.
+        await waitUntil(() => spy.startupSettledCount, count => count >= 1, 60_000, 100)
         expect(spy.startupCount).toBe(1)
         const warmedSessionId = spy.lastStartupSessionId
         expect(warmedSessionId).toBeDefined()
-        await sleep(2_000)
+        // `#held` is assigned in the continuation after the awaited `startup()`
+        // — a later microtask than the counter this just observed. One real
+        // timer tick is all that is needed to be past it, and unlike the 2s it
+        // replaces, this does not scale with machine load.
+        await sleep(100)
 
         // Session B: the SAME shape (cwd, model, everything the fingerprint
         // covers) — should consume the warm handle. Proof: its id is the one

@@ -137,9 +137,13 @@ describe('ClaudeCodeService registry lifecycle', () => {
 
       await expect(service.close(snapshot.id)).resolves.toBe(true)
       expect(fake.queries[0]?.closed).toBe(true)
-      expect(service.get(snapshot.id)).toBeUndefined()
+      // Dropped from the LIVE registry: nothing to drive, nothing in `list()`,
+      // and a second close reports that there was nothing left to close.
+      expect(service.session(snapshot.id)).toBeUndefined()
       expect(service.list()).toEqual([])
       await expect(service.close(snapshot.id)).resolves.toBe(false)
+      // But `get()` still answers, from the tombstone, with WHY it ended.
+      expect(service.get(snapshot.id)).toMatchObject({ status: 'closed', closeReason: 'closed' })
     } finally {
       await dispose()
     }

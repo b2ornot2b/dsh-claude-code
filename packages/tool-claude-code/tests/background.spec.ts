@@ -240,7 +240,7 @@ describe('the JobHooks contract', () => {
 
       await expect(hooks?.done).resolves.toEqual({ status: 'killed', detail: 'killed by test' })
       expect(query.closed).toBe(true)
-      expect(harness.ctx.claudeCode.get(sessionId as never)).toBeUndefined()
+      expect(harness.ctx.claudeCode.session(sessionId as never)).toBeUndefined()
     } finally {
       await harness.dispose()
     }
@@ -257,6 +257,73 @@ describe('the JobHooks contract', () => {
 
       await harness.call('claude_code_close', { session_id: sessionId })
       await expect(hooks?.done).resolves.toEqual({ status: 'completed', detail: 'session closed' })
+    } finally {
+      await harness.dispose()
+    }
+  })
+
+  it('settles done as FAILED when the subprocess dies mid-turn', async () => {
+    const harness = await mountTools({ jobs: true })
+    try {
+      const result = await harness.call('claude_code_open', {
+        cwd: CWD, prompt: 'a long job', background: true,
+      })
+      const sessionId = (result.value as { ccSessionId: string }).ccSessionId
+      const hooks = harness.jobs?.hooks[0]
+      const query = await firstQuery(harness)
+      await waitFor(() => query.sent.length === 1, 'the opening prompt to reach the subprocess')
+
+      // Nobody asked for anything: the subprocess dies with the turn in flight.
+      // Before the seam's self-close this job stayed `running` forever.
+      query.endStream()
+      await settle()
+
+      await expect(hooks?.done).resolves.toMatchObject({ status: 'failed' })
+      expect(String((await hooks?.done)?.detail)).toContain('mid-turn')
+      expect(harness.ctx.claudeCode.get(sessionId as never)).toMatchObject({ closeReason: 'crashed' })
+    } finally {
+      await harness.dispose()
+    }
+  })
+
+  it('settles done as COMPLETED when the subprocess exits between turns', async () => {
+    const harness = await mountTools({ jobs: true })
+    try {
+      const result = await harness.call('claude_code_open', {
+        cwd: CWD, prompt: 'quick job', background: true,
+      })
+      const sessionId = (result.value as { ccSessionId: string }).ccSessionId
+      const hooks = harness.jobs?.hooks[0]
+      const query = await firstQuery(harness)
+      await waitFor(() => query.sent.length === 1, 'the opening prompt to reach the subprocess')
+      await query.emitResult('success', { result: 'done' })
+
+      query.endStream()
+      await settle()
+
+      // Every turn it was given ran; the CLI simply ended. That is not a failure.
+      await expect(hooks?.done).resolves.toMatchObject({ status: 'completed' })
+      expect(harness.ctx.claudeCode.get(sessionId as never)).toMatchObject({ closeReason: 'exited' })
+    } finally {
+      await harness.dispose()
+    }
+  })
+
+  it('settles done exactly once when a crash races a kill, and reports the kill', async () => {
+    const harness = await mountTools({ jobs: true })
+    try {
+      await harness.call('claude_code_open', { cwd: CWD, prompt: 'racing', background: true })
+      const hooks = harness.jobs?.hooks[0]
+      const query = await firstQuery(harness)
+      await waitFor(() => query.sent.length === 1, 'the opening prompt to reach the subprocess')
+
+      // The kill lands first and closes the session; the pump end that follows
+      // must not re-settle, and must not relabel a deliberate kill as a crash.
+      hooks?.cancel('killed by test')
+      query.endStream()
+      await settle()
+
+      await expect(hooks?.done).resolves.toEqual({ status: 'killed', detail: 'killed by test' })
     } finally {
       await harness.dispose()
     }
@@ -347,7 +414,7 @@ describe('the JobHooks contract', () => {
         await expect(hooks?.done, order).resolves.toEqual(order === 'close-then-kill'
           ? { status: 'completed', detail: 'session closed' }
           : { status: 'killed', detail: 'killed first' })
-        expect(harness.ctx.claudeCode.get(sessionId as never), order).toBeUndefined()
+        expect(harness.ctx.claudeCode.session(sessionId as never), order).toBeUndefined()
       } finally {
         await harness.dispose()
       }
@@ -372,7 +439,7 @@ describe('the JobHooks contract', () => {
       await expect(harness.jobs?.hooks[0]?.done)
         .resolves.toEqual({ status: 'killed', detail: 'killed while starting' })
       await settle()
-      expect(harness.ctx.claudeCode.get(handle.ccSessionId as never)).toBeUndefined()
+      expect(harness.ctx.claudeCode.session(handle.ccSessionId as never)).toBeUndefined()
     } finally {
       await harness.dispose()
     }

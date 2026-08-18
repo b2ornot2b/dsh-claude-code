@@ -45,6 +45,12 @@ const NUMERIC_SCRUB_FIELDS = new Set([
   'thinking_tokens',
   'inputTokens',
   'outputTokens',
+  // The CLI's running estimate on `stream_event` progress messages. Recording
+  // the SAME prompt twice produces different values (the model does not emit
+  // identical token counts run to run), so these dirtied all three fixtures on
+  // every sweep — the same class as the counters above, simply missed.
+  'estimated_tokens',
+  'estimated_tokens_delta',
   'cacheReadInputTokens',
   'cacheCreationInputTokens',
   'contextWindow',
@@ -68,10 +74,73 @@ const ID_PATTERNS: ReadonlyArray<{ readonly kind: string, readonly regex: RegExp
   // Anthropic / Claude Code uuids (session ids, message uuids, request ids, …).
   { kind: 'uuid', regex: /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi },
   // Anthropic tool_use block ids.
-  { kind: 'tool', regex: /toolu_[A-Za-z0-9_-]+/g },
-  // Anthropic provider message ids.
-  { kind: 'msg', regex: /msg_[A-Za-z0-9_-]+/g },
+  { kind: 'tool', regex: /toolu_[A-Za-z0-9]{16,}/g },
+  // Anthropic provider message ids: `msg_` then base62, no separators, always
+  // long (`msg_011Ce8gmjWZRoiEDtCGReRAp` — 24 characters in the Phase 0 spike
+  // logs). The length floor and the excluded `_`/`-` are BOTH load-bearing: the
+  // permissive `msg_[A-Za-z0-9_-]+` this replaces also matched
+  // `msg_lifecycle_v1`, one of the three capability names `system/init`
+  // advertises, and rewrote it to `msg-scrubbed-0001` in every recorded
+  // fixture. That is a scrubber destroying a deterministic, meaningful value —
+  // the exact opposite of its job — and it silently corrupted the capability
+  // list this seam feature-detects on (never version-sniffs, delta S14).
+  { kind: 'msg', regex: /msg_[A-Za-z0-9]{16,}/g },
+  // Anthropic API request ids (`req_011Ce9GpntFmd3MzGb7HNcyB`), which the CLI
+  // echoes onto `stream_event` and `result` messages. Same shape rule as the
+  // message ids above, and the same reason for the length floor.
+  { kind: 'req', regex: /req_[A-Za-z0-9]{16,}/g },
 ]
+
+/**
+ * String fields whose value is a wall clock or a provider-side opaque blob:
+ * different on every recording, and meaningless to the mirror's projection.
+ *
+ * - `timestamp` — the CLI's ISO instant on `stream_event`/`result` messages.
+ *   The numeric timing fields were already zeroed; this is the same fact in
+ *   string form, and it was dirtying every fixture on every sweep.
+ * - `signature` — the thinking block's provider signature, a long base64 blob
+ *   derived from the model's own output, so it changes whenever the text does.
+ *   It has no dsh representation at all: `CcMirror.onBlockDelta` ignores
+ *   `signature_delta` outright ("provider replay metadata with nowhere to
+ *   live", delta D9), so preserving it records bytes nothing will ever read.
+ */
+const STRING_SCRUB_FIELDS = new Map<string, string>([
+  ['timestamp', '1970-01-01T00:00:00.000Z'],
+  ['signature', 'scrubbed-signature'],
+])
+
+/**
+ * `system/init` fields that describe the RECORDER'S MACHINE rather than the
+ * session: the slash commands, skills, subagents and plugins that happen to be
+ * installed where the sweep ran.
+ *
+ * They are not test-relevant (the mirror ignores every one of them — see
+ * `CcMirror.onSystem`, which reads `model` and nothing else off an init), they
+ * change whenever anyone installs a plugin or a skill, and they carry the
+ * recorder's personal configuration into a checked-in file. Left alone, every
+ * `pnpm run test:live` on a different machine rewrites all three fixtures with
+ * a diff that says nothing about Claude Code.
+ *
+ * Replaced with a marker rather than dropped, so the fixture still records that
+ * the field existed and was an array — a future reader must not conclude the
+ * CLI stopped sending it.
+ *
+ * `tools` is deliberately NOT here: it is also environment-dependent (plugin
+ * and MCP tools appear in it), but it is the one list a mirror or card fixture
+ * could legitimately be read against, so it stays verbatim and is documented as
+ * the remaining churn source.
+ */
+const ENVIRONMENT_LIST_FIELDS = new Set([
+  'slash_commands',
+  'terminal_slash_commands',
+  'skills',
+  'agents',
+  'plugins',
+  'commands',
+])
+
+/** What an {@link ENVIRONMENT_LIST_FIELDS} array is replaced with. */
+const SCRUBBED_LIST = ['scrubbed-machine-local-list']
 
 /**
  * Blanket path scrubs that need no per-fixture literal: the CLI derives a
@@ -142,11 +211,17 @@ export function createScrubber(literals: readonly LiteralReplacement[] = []): Sc
   }
 
   function scrubValue(value: unknown, key: string | undefined): unknown {
-    if (typeof value === 'string') return scrubString(value)
+    if (typeof value === 'string') {
+      const replacement = key === undefined ? undefined : STRING_SCRUB_FIELDS.get(key)
+      return replacement ?? scrubString(value)
+    }
     if (typeof value === 'number') {
       return key !== undefined && NUMERIC_SCRUB_FIELDS.has(key) ? 0 : value
     }
-    if (Array.isArray(value)) return value.map(entry => scrubValue(entry, undefined))
+    if (Array.isArray(value)) {
+      if (key !== undefined && ENVIRONMENT_LIST_FIELDS.has(key)) return [...SCRUBBED_LIST]
+      return value.map(entry => scrubValue(entry, undefined))
+    }
     if (value !== null && typeof value === 'object') {
       const out: Record<string, unknown> = {}
       for (const [entryKey, entryValue] of Object.entries(value)) out[entryKey] = scrubValue(entryValue, entryKey)

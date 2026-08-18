@@ -129,7 +129,7 @@ describe.skipIf(!LIVE)('claude_code_open background mode, live jobs stack (DSH_C
           250,
         )
         expect(finalStatus).toBe('killed')
-        expect(harness.ctx.claudeCode.get(handle.ccSessionId as never)).toBeUndefined()
+        expect(harness.ctx.claudeCode.session(handle.ccSessionId as never)).toBeUndefined()
 
         await waitForSessionProcessCount(handle.ccSessionId, 0, 15_000)
       } finally {

@@ -151,8 +151,11 @@ describe('createClaudeCodeAgent: teardown', () => {
         // The session is still attached: its publication hooks were live for
         // every closing event the mirror just wrote.
         sessionLive: ctx.sessions.get(agent.id) !== undefined,
-        // The subprocess is already gone.
-        ccLive: ctx.claudeCode.get(agent.id) !== undefined,
+        // The subprocess is already gone. Probed through `session()` — the
+        // LIVE-actor lookup — because `get()` deliberately keeps answering for
+        // a bounded while after a close (the closed-session tombstone), so it
+        // is no longer the question "is this still running?".
+        ccLive: ctx.claudeCode.session(agent.id) !== undefined,
         // …and the mirror closed the turn it left open.
         turnClosed: agent.session.events.some(event => event.type === 'turn/end'),
       }

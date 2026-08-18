@@ -418,11 +418,92 @@ async function pgrepCount(pattern: string): Promise<number> {
   }
 }
 
+/**
+ * Find the live pid(s) for one session's Claude Code subprocess, scoped by
+ * the same `--session-id=<uuid>` argv pattern {@link countSessionProcesses}
+ * uses (parallel-safe: immune to a neighbouring live spec's own subprocess).
+ * @param sessionId - the session whose subprocess to find.
+ * @returns the matching pids (usually zero or one).
+ */
+async function sessionPids(sessionId: string): Promise<number[]> {
+  try {
+    const { stdout } = await execFileP('pgrep', ['-f', sessionProcPattern(sessionId)])
+    const trimmed = stdout.trim()
+    return trimmed.length === 0 ? [] : trimmed.split('\n').map(line => Number(line))
+  } catch {
+    return []
+  }
+}
+
+/**
+ * SIGKILL one session's live subprocess directly, for the failure-injection
+ * suite: a real, unrecoverable subprocess death (`kill -9`) — as opposed to a
+ * cooperative `close()`/`interrupt()`, which nothing else in this test tree
+ * exercises. The caller is expected to have already confirmed the subprocess
+ * exists (e.g. via {@link waitForSessionProcessCount}); killing zero pids is
+ * a silent no-op rather than a thrown error, so a caller that forgets that
+ * precondition gets a hang (waiting for a death that never happens) rather
+ * than a misleading pass.
+ * @param sessionId - the session whose subprocess to kill.
+ * @returns the number of pids signalled.
+ */
+export async function killSessionProcess(sessionId: string): Promise<number> {
+  const pids = await sessionPids(sessionId)
+  for (const pid of pids) {
+    try {
+      process.kill(pid, 'SIGKILL')
+    } catch {
+      // Already gone by the time we signalled it — that IS the target state.
+    }
+  }
+  return pids.length
+}
+
+/**
+ * Capture every process-level `unhandledRejection` for the lifetime of one
+ * test, so a failure-injection spec can assert none fired (rather than
+ * relying on the process crashing, which vitest workers do not always
+ * surface as a test failure). Call {@link UnhandledRejectionGuard.stop}
+ * before asserting `reasons` — always, even on a failing path — or the
+ * listener leaks into the next test in the same worker.
+ */
+export interface UnhandledRejectionGuard {
+  /** Every reason seen since {@link captureUnhandledRejections} was called. */
+  readonly reasons: unknown[]
+  /** Detach the listener. Idempotent-safe to call once. */
+  stop: () => void
+}
+
+/**
+ * Start capturing `unhandledRejection`s on the current process.
+ * @returns the guard; call `.stop()` in a `finally` before asserting.
+ */
+export function captureUnhandledRejections(): UnhandledRejectionGuard {
+  const reasons: unknown[] = []
+  const onUnhandled = (reason: unknown): void => { reasons.push(reason) }
+  process.on('unhandledRejection', onUnhandled)
+  return { reasons, stop: () => { process.off('unhandledRejection', onUnhandled) } }
+}
+
 /** A backend wrapper that counts `query()`/`startup()` calls and remembers the last warmed sessionId. */
 export interface BackendCountSpy {
   readonly backend: QueryBackend
   queryCount: number
+  /** `startup()` calls INVOKED. Increments before the subprocess exists. */
   startupCount: number
+  /**
+   * `startup()` calls SETTLED — the real spawn plus initialize handshake is
+   * done, so the pool is about to store the lease.
+   *
+   * The distinction is the whole point: `startupCount` flips the instant the
+   * call is made, and the pool cannot serve a warm open until the promise
+   * behind it resolves. A test that waits on the invocation count and then
+   * sleeps a fixed interval is racing a real subprocess spawn, which is
+   * exactly what made `prewarm.live.spec.ts` flake under a fully parallel
+   * sweep (a ~300ms handshake in isolation is not a ~300ms handshake with
+   * thirty of them starting at once).
+   */
+  startupSettledCount: number
   lastStartupSessionId: string | undefined
 }
 
@@ -447,11 +528,20 @@ export function wrapBackendCounts(inner: QueryBackend): BackendCountSpy {
       async startup(params: Parameters<QueryBackend['startup']>[0]) {
         spy.startupCount += 1
         spy.lastStartupSessionId = params.options.sessionId
-        return await inner.startup(params)
+        try {
+          return await inner.startup(params)
+        } finally {
+          // `finally`, not the success path: a FAILED pre-warm also stops the
+          // pool from ever holding a lease, so a waiter must be released for it
+          // too — otherwise the barrier below turns a warm-up failure into a
+          // 30-second timeout instead of the assertion that names the problem.
+          spy.startupSettledCount += 1
+        }
       },
     },
     queryCount: 0,
     startupCount: 0,
+    startupSettledCount: 0,
     lastStartupSessionId: undefined,
   }
   return spy

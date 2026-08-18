@@ -15,7 +15,7 @@
     "test": "pnpm run build && vitest run",
     "test:unit": "vitest run --project unit",
     "test:composition": "pnpm run build && vitest run --project composition",
-    "test:live": "pnpm run build && DSH_CC_LIVE=1 vitest run --project unit packages/claude-code/tests/live packages/tool-claude-code/tests/live packages/claude-code-agent/tests/live",
+    "test:live": "pnpm run build && DSH_CC_LIVE=1 vitest run --project unit --project examples packages/claude-code/tests/live packages/tool-claude-code/tests/live packages/claude-code-agent/tests/live examples/delegation-demo",
     "clean": "pnpm -r run clean"
   },
   "devDependencies": {

@@ -290,16 +290,25 @@ that no dsh model request is built from, so there is no prefix to invalidate the
 - **One inbox target, two seam realities.** `send(msg, 'next-step', true)` maps to a steer, which
   Claude Code implements as abort-and-refold rather than as a step-boundary splice. The inbox target
   is recorded faithfully; the execution semantics are the SDK's.
-- **A dead subprocess does not close the session by itself** (seam limitation, inherited, and the
-  sharpest edge on this list). The seam's pump ends when the SDK's iterator completes, but nothing
-  calls `CcSession.close()`, so its status machine never moves: the agent keeps reading **`running`**
-  (not `idle`), `whenIdle()` never settles, and `runMaintenance()` keeps refusing the phase. Only an
-  explicit close recovers — `handle.dispose()`, plugin unload, or `ctx.claudeCode.close(id)` — and
-  disposal is bounded (below) precisely so this cannot wedge an unload.
-  `tests/orderings.spec.ts` pins the current behaviour so a future seam that self-closes on pump
-  death shows up there first. The fix belongs in the seam (close on pump completion when the session
-  was not already closing), not here: the adapter has no signal of its own to act on.
-- **The agent's own live suite exists** (`tests/live/`, six specs, `DSH_CC_LIVE=1 pnpm run
+- **A dead subprocess reaches `idle`** (fixed in Phase 7, in the seam, where it belonged). The seam
+  now closes itself when the SDK's iterator completes or throws, so the adapter's existing
+  `onClose` subscription carries the transition: the agent reads **`idle`**, a parked `whenIdle()`
+  settles, and `runMaintenance()` will claim the phase again. No adapter code changed for this — it
+  was always downstream of a close it had no signal to trigger. Disposal stays bounded anyway.
+  The `tests/orderings.spec.ts` probe that pinned the OLD behaviour was written to fail exactly when
+  the seam learned to self-close, and now asserts the new one.
+- **The agent does NOT distinguish how the session ended.** `AgentStatus` is exactly
+  `idle | running` and disposal is not a third value (D7), so `closed`, `exited` and `crashed` all
+  project onto `idle`. WHY it ended is a seam-level fact: read
+  `ctx.claudeCode.get(agent.id)?.closeReason`. Inventing an agent-level distinction would be a third
+  status under another name.
+- **The agent's own live suite exists** (`tests/live/`, seven specs, `DSH_CC_LIVE=1 pnpm run
   test:live`): basic drive + approval routing, steer refold, `AskUserQuestion`, both `keepInbox`
-  defaults, mid-turn dispose, and plugin-only HMR. What is left for Phase 7 is failure injection
-  (killing a subprocess out from under a live agent) and the agent-card / UI surface.
+  defaults, mid-turn dispose, plugin-only HMR, and — Stage 2 of Phase 7 —
+  `agent-kill.live.spec.ts`: a real SIGKILL on the spawned agent's subprocess, asserting
+  `status` reaches `idle` and `whenIdle()` resolves with no `cancel()`/`dispose()` call at all
+  (the LIVE half of the bullet above, observed against a real subprocess rather than the fake
+  seam). Phase 7 also added the offline failure injection
+  (`packages/claude-code/tests/session-death.spec.ts`, plus the inverted probe in
+  `tests/orderings.spec.ts`). The agent-card / UI surface remains open (see the seam's own
+  README: cards are structurally not representable in dsh rc.7).
