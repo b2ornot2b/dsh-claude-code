@@ -84,6 +84,17 @@ export type {
   ResolvedClaudeCodeConfig,
 } from './config.ts'
 
+export {
+  buildSessionInventory,
+  buildSessionLimitInfo,
+  formatDuration,
+  INVENTORY_ASK_DETAIL_LIMIT,
+  isReapable,
+  renderSessionLimit,
+  selectReapable,
+  sessionLimitError,
+} from './inventory.ts'
+
 export { createInputStream } from './input-stream.ts'
 export type { CcInputStream, CcUserMessageInit } from './input-stream.ts'
 
@@ -121,7 +132,10 @@ export type {
   CcSessionOptions,
 } from './session.ts'
 
-export { apply, CLOSED_SESSION_HISTORY, ClaudeCodeService, inject, name } from './service.ts'
+export {
+  apply, CLOSED_SESSION_HISTORY, ClaudeCodeService, inject, MAX_IDLE_SWEEP_MS, MIN_IDLE_SWEEP_MS, name,
+  sweepIntervalMs,
+} from './service.ts'
 export type { ClaudeCodeServiceDeps } from './service.ts'
 
 export {
@@ -142,13 +156,18 @@ export type {
   CcCloseReason,
   CcContextUsage,
   CcErrorCode,
+  CcErrorData,
+  CcListOptions,
   CcLogger,
   CcMirrorAttachment,
   CcOpenOptions,
   CcPermissionMode,
   CcSessionId,
+  CcSessionInventoryEntry,
+  CcSessionLimitInfo,
   CcSessionSnapshot,
   CcSessionStatus,
   CcSettingSource,
   ClaudeCode,
+  ClaudeCodeErrorOptions,
 } from './types.ts'

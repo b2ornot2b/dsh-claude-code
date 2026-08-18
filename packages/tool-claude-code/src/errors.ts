@@ -1,5 +1,5 @@
 /**
- * The typed failures these six tools raise on their own behalf.
+ * The typed failures these tools raise on their own behalf.
  *
  * Everything the SEAM refuses already arrives as a `ClaudeCodeError` with a
  * `CcErrorCode` (`INVALID_CWD`, `SESSION_LIMIT`, `SESSION_EXISTS`,

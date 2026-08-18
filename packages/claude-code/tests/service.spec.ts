@@ -32,6 +32,8 @@ async function mount(config: ClaudeCodeConfig = {}): Promise<{
 /** One fake session record, shaped like the service's private bookkeeping. */
 interface FakeRecord {
   id: string
+  cwd: string
+  openedAt: number
   status: string
   pendingAsks: number
   close(): Promise<void>
@@ -166,8 +168,11 @@ describe('ClaudeCodeService teardown (HMR safety)', () => {
     const id = newCcSessionId()
     let closed = 0
     const registry = sessionRegistry(service)
+    const openedAt = Date.now() - 5_000
     registry.set(id, {
       id,
+      cwd: '/white/box',
+      openedAt,
       status: 'idle',
       pendingAsks: 0,
       close: () => {
@@ -177,7 +182,18 @@ describe('ClaudeCodeService teardown (HMR safety)', () => {
     })
     // `pendingAskDetails` is empty rather than absent: a record with no live
     // actor has no ask table, and "nothing pending" is the honest projection.
-    expect(service.list()).toEqual([{ id, status: 'idle', pendingAsks: 0, pendingAskDetails: [] }])
+    // `lastActivityAt` falls back to `openedAt` for the same reason — an
+    // actorless record has no activity clock, and inventing "now" would make it
+    // look permanently fresh to the idle sweep.
+    expect(service.list()).toEqual([{
+      id,
+      cwd: '/white/box',
+      openedAt,
+      lastActivityAt: openedAt,
+      status: 'idle',
+      pendingAsks: 0,
+      pendingAskDetails: [],
+    }])
 
     await fiber.dispose()
     expect(closed).toBe(1)
@@ -196,12 +212,16 @@ describe('ClaudeCodeService teardown (HMR safety)', () => {
     const registry = sessionRegistry(service)
     registry.set(failing, {
       id: failing,
+      cwd: '/white/box',
+      openedAt: Date.now(),
       status: 'idle',
       pendingAsks: 0,
       close: () => Promise.reject(new Error('subprocess already gone')),
     })
     registry.set(healthy, {
       id: healthy,
+      cwd: '/white/box',
+      openedAt: Date.now(),
       status: 'idle',
       pendingAsks: 0,
       close: () => {

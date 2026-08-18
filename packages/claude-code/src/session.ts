@@ -349,6 +349,18 @@ export class CcSession {
   /** Subscribers to unanswerable-ask failures. */
   readonly #askErrorListeners = new Set<(error: ClaudeCodeError) => void>()
 
+  /** Epoch ms this actor was constructed — the session's age origin. */
+  readonly #openedAt = Date.now()
+
+  /**
+   * Epoch ms of the last observable activity: a send out, a message in, or the
+   * close. This is the clock the concurrency inventory sorts on and the
+   * service's idle sweep reaps on, so it is deliberately updated in exactly the
+   * two places where something CROSSES the subprocess boundary — not on a
+   * status read, which would make a poller keep a dead session alive forever.
+   */
+  #lastActivityAt = Date.now()
+
   #status: CcSessionStatus = 'starting'
   #query: CcBackendQuery | undefined
   #pump: Promise<CcCloseReason> | undefined
@@ -403,6 +415,28 @@ export class CcSession {
   /** Lifecycle state: `starting` → `idle` ⇄ `running` → `closed`. */
   get status(): CcSessionStatus {
     return this.#status
+  }
+
+  /** The absolute working directory this session runs in. */
+  get cwd(): string {
+    return this.#options.cwd
+  }
+
+  /** Epoch ms this session was constructed. */
+  get openedAt(): number {
+    return this.#openedAt
+  }
+
+  /**
+   * Epoch ms of the last send, received message, or close.
+   *
+   * Reading state does NOT count as activity: a caller polling
+   * `claude_code_status` every ten seconds would otherwise hold a session that
+   * nobody is actually driving above the idle threshold indefinitely, which is
+   * precisely the abandoned session the sweep exists to reclaim.
+   */
+  get lastActivityAt(): number {
+    return this.#lastActivityAt
   }
 
   /**
@@ -478,6 +512,9 @@ export class CcSession {
     return {
       id: this.id,
       status: this.#status,
+      cwd: this.#options.cwd,
+      openedAt: this.#openedAt,
+      lastActivityAt: this.#lastActivityAt,
       ...(this.#model === undefined ? {} : { model: this.#model }),
       pendingAsks: this.pendingAsks,
       pendingAskDetails: this.pendingAskDetails,
@@ -671,6 +708,7 @@ export class CcSession {
     })
 
     const sentAt = Date.now()
+    this.#lastActivityAt = sentAt
     this.#outbox.set(uuid, { uuid, mode, sentAt, state: mode === 'inject' ? 'committed' : 'queued' })
     // Fanned out BEFORE the status machine moves: a subscriber only ever learns
     // that a message left, never how the session interpreted it.
@@ -862,6 +900,7 @@ export class CcSession {
   private async runClose(reason: CcCloseReason): Promise<void> {
     this.#closed = true
     this.#closeReason = reason
+    this.#lastActivityAt = Date.now()
     // 1. Settle pending asks — nothing may be left holding a promise the
     //    closed query can never answer (§4.6).
     this.settleAsks()
@@ -1080,6 +1119,9 @@ export class CcSession {
    * @returns nothing.
    */
   private observe(message: CcSdkMessage): void {
+    // Anything the subprocess says is activity, including the chatter of a long
+    // tool call: a session streaming for twenty minutes is working, not idle.
+    this.#lastActivityAt = Date.now()
     let interruptArtifact = false
     let interruptedTurn = false
     let reinit = false

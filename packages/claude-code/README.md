@@ -25,7 +25,7 @@ session log — see [Mirroring](#mirroring-into-a-dsh-session-log). Permission p
 clarifying questions and plan reviews now route to the dsh `ctx.approval` / `ctx.userQuestions`
 seams — see [The ask channel](#the-ask-channel).
 
-The six model-facing `claude_code_*` tools in `@deepseek-ai/dsh-tool-claude-code` are now
+The seven model-facing `claude_code_*` tools in `@deepseek-ai/dsh-tool-claude-code` are now
 **real**: they open (synchronously or as a dsh job), send, wait, report status, cancel and
 close through this seam, and they are what supplies the ask target below. A session opened
 with no ask target still fails CLOSED (every tool call denied with an explanation), which is
@@ -86,10 +86,10 @@ assumes it can will be silently wrong the first time CC auto-compacts.
 
 | Member | Phase 4 behavior |
 |---|---|
-| `open(options)` | opens (or resumes, or forks) a live session and returns its snapshot. Refuses a non-absolute or missing `cwd` with `INVALID_CWD` **before** anything spawns, and a session past `limits.maxConcurrentSessions` with `SESSION_LIMIT` |
+| `open(options)` | opens (or resumes, or forks) a live session and returns its snapshot. Refuses a non-absolute or missing `cwd` with `INVALID_CWD` **before** anything spawns, and a session past `limits.maxConcurrentSessions` with `SESSION_LIMIT` — a refusal that INVENTORIES the live sessions (see below) |
 | `get(id)` | the snapshot of a registered session (status, model, pending asks) — or, for one that closed recently, its final snapshot with `closeReason`. `undefined` only when this context never opened it. Ask `session(id)` instead when the question is "is it still live?" |
-| `list()` | every LIVE session, in open order; a fresh array per call. Never includes a closed one |
-| `close(id)` | settles pending asks, aborts, closes the SDK query, ends the input stream, drops the registry entry. Returns `false` for an id with nothing live to close |
+| `list(options?)` | every LIVE session, in open order; a fresh array per call. `{ includeClosed: true }` appends the recently-closed tombstones, oldest first — omitted, it means live sessions only, exactly as it always has (this service's own slot accounting depends on that). Never two entries for one id: a resumed session holds both a record and a tombstone, and the live one wins |
+| `close(id, reason?)` | settles pending asks, aborts, closes the SDK query, ends the input stream, drops the registry entry. Returns `false` for an id with nothing live to close. `reason` defaults to `closed`; the idle sweep passes `reaped` |
 | `session(id)` | the `CcSession` actor — `send` / `interrupt` / `waitForResult` / `onMessage`. Values (snapshots) cross tool boundaries; this handle does not |
 | `accountInfo()` | the account from the first live session's cached initialize response. Throws `NO_LIVE_SESSION` when nothing is open: it never spawns a subprocess of its own |
 | `attachMirror(id, session, opts?)` | mirrors a live session into a dsh session log (see below). Throws `UNKNOWN_SESSION` for an unregistered id; when the session closes the mirror is finalized (a turn left open by a mid-turn death is closed as `aborted`/`disposed`) and then detached |
@@ -105,7 +105,54 @@ tagged `exited` (it ended between turns) or `crashed` (it ended mid-turn, so tha
 produce a result). Everything downstream of a close therefore happens with nobody asking: pending
 asks are denied, `waitForResult()` waiters fail with `SESSION_CLOSED`, the mirror's dangling turn
 is finalized, the registry entry is dropped, and a background job settles. Read
-`get(id)?.closeReason` to tell the three apart; `status` reports `closed` for all of them.
+`get(id)?.closeReason` to tell them apart; `status` reports `closed` for all of them. A fourth
+reason, `reaped`, is produced only by the opt-in idle sweep (see below).
+
+## A `SESSION_LIMIT` refusal inventories what is holding the slots
+
+`limits.maxConcurrentSessions` is **service-wide**, and this service outlives any one dsh session.
+The production trace: a fresh agent hit the cap three times while believing it had opened two
+sessions. Two slots were held by sessions from EARLIER runs of the same host service, one of them
+parked 1h32m on a permission prompt nobody ever answered (an interactive ask has no timeout, by
+design). The refusal said only `limits.maxConcurrentSessions (4) is reached`, so the agent could
+not name a single session holding a slot — and closed its own still-wanted plan session by
+guesswork.
+
+The refusal now carries the whole inventory, in prose AND as `error.data.sessionLimit`
+(`CcSessionLimitInfo`), both built from one projection so they can never disagree. Per session: id,
+`cwd`, status, how long it has been open, how long it has been idle, and — when a human is
+mid-decision on it — the kind, tool and the exact sentence that person is reading. The list is
+sorted **best close candidate first**: nothing pending on a human before anything a person is
+deciding on, idle before running, longest-idle first. `closeCandidate` names the one to close, and
+is ABSENT when every live session has a pending ask, because there is then no safe answer. The text
+says plainly that these sessions may belong to other dsh sessions sharing this host.
+
+`claude_code_list` (in `@deepseek-ai/dsh-tool-claude-code`) exposes the same inventory on demand;
+`buildSessionInventory` / `buildSessionLimitInfo` / `renderSessionLimit` / `selectReapable` are
+exported as pure functions of `(snapshots, now)`.
+
+## Opt-in idle reaping (`limits.idleTimeoutMs`)
+
+**Unset by default, and unset means no timer at all** — not a disabled sweep, not a zero-length one.
+An operator who did not ask for reaping gets exactly the behaviour they had before this option
+existed.
+
+When it is set, ONE service-wide `setInterval` (through `ctx.effect`, so it dies with the fiber;
+`unref`'d, so it never holds the process open) sweeps at a quarter of the ceiling and closes every
+session that is `idle`, has **zero pending asks**, and has seen no activity for that long. The close
+is the same sequence `claude_code_close` runs — asks settled, mirror finalized, tombstone recorded,
+waiters settled — with `closeReason: 'reaped'` as the only difference, and each reap is logged with
+the session, its idle age and the ceiling it crossed.
+
+**A session with a pending ask is never reaped**, however long it has sat. That is a human still
+deciding, and it is precisely the state that produced the 1h32m session this option exists to clean
+up after. Activity means a send out or a message in — reading `status` does not count, or a poller
+would keep an abandoned session alive forever.
+
+The sweep re-asks that question **per session, immediately before each close**, not once per sweep.
+It awaits every close, so every session after the first is acted on across at least one turn of the
+event loop — and an ask raised by the subprocess, or a `send()` from a tool call, lands in exactly
+that gap. A session that becomes blocked or busy mid-sweep is spared and says so in the log.
 
 ## The ask channel
 
@@ -252,8 +299,9 @@ claude-code:
     ruleCachePath: null           # null = <cwd>/.dsh-claude-code/always-allow.json
     rules: []                     # preseeded always-allow rules: [{ toolName, ruleContent }]
   limits:
-    maxConcurrentSessions: 4
+    maxConcurrentSessions: 4      # SERVICE-WIDE; a refusal inventories who holds the slots
     maxBudgetUsd: null
+    idleTimeoutMs: null           # null/omitted = OFF, no timer installed. See idle reaping above.
   env: {}                         # extra passthrough env (e.g. CLAUDE_CODE_MAX_RETRIES)
 ```
 
@@ -367,7 +415,7 @@ substitutes: `inject()` → `shouldQuery: false` sends, and model switching →
 
 None **for the dsh model**, as this package registers no tool schema, no system-prompt
 contribution, and no model-visible event. The model-facing surface belongs entirely to
-`@deepseek-ai/dsh-tool-claude-code` (the six live delegation tools — see that package's
+`@deepseek-ai/dsh-tool-claude-code` (the seven live delegation tools — see that package's
 README for what each one costs the model's context window).
 
 What Phase 3 adds is **human**-facing, not model-facing: the mirror projects a Claude Code
@@ -395,6 +443,26 @@ over its own transcript, which the dsh mirror neither feeds nor invalidates.
 
 ## Known Limitations and Deferred Work
 
+- **The inventory covers this service's registry, nothing wider.** `limits.maxConcurrentSessions`
+  is enforced per seam service, so two dsh processes each mounting their own seam neither share
+  the cap nor see each other's sessions. Within one host service — the deployment the production
+  trace ran on, where the cap really is shared and the sessions really were invisible — the
+  inventory is complete.
+- **The idle sweep cannot reclaim the session that caused the incident.** The 1h32m session was
+  parked on an unanswered ask, and a pending ask makes a session permanently ineligible. That is
+  deliberate (reaping it denies a human's decision for them), which means `idleTimeoutMs` fixes
+  the *abandoned-but-idle* case and the *blocked* case is fixed by naming it — in the
+  `SESSION_LIMIT` refusal and in `claude_code_list` — so a person can answer or close it
+  knowingly. A timeout for interactive asks (`ask.timeoutMs`) already exists and is separately
+  opt-in for the same reason.
+- **Reap latency is up to ~1.25x `idleTimeoutMs`.** One timer sweeps at a quarter of the ceiling
+  (clamped to 250ms…60s), so a session crosses the line up to one sweep interval before it is
+  actually closed. Reclaiming a slot is not time-critical; waking the event loop for every
+  session is worse.
+- **`lastActivityAt` does not count reads.** `snapshot()`, `status` and `list()` deliberately do
+  not touch it, so a caller polling a session it has abandoned cannot keep it above the idle
+  threshold forever. The cost is that a session being *watched* but not driven is reapable, which
+  is the correct answer: nothing is being asked of it.
 - **No UI can add an always-allow rule yet** — dsh's approval vocabulary has no `'always'`
   outcome (`allowed-once | rejected | cancelled | unavailable`), and the questions seam is not
   a permission channel, so nothing a human clicks can write the rule cache. Entries come from

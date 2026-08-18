@@ -1,6 +1,6 @@
 # @deepseek-ai/dsh-tool-claude-code
 
-Model-facing tools over the [`@deepseek-ai/dsh-claude-code`](../claude-code/README.md) capability seam (`ctx.claudeCode`): `claude_code_open`, `claude_code_send`, `claude_code_wait`, `claude_code_status`, `claude_code_cancel`, and `claude_code_close`.
+Model-facing tools over the [`@deepseek-ai/dsh-claude-code`](../claude-code/README.md) capability seam (`ctx.claudeCode`): `claude_code_open`, `claude_code_send`, `claude_code_wait`, `claude_code_status`, `claude_code_list`, `claude_code_cancel`, and `claude_code_close`.
 
 This package is `private: true` and keeps the `@deepseek-ai/dsh-*` name for future upstreaming — we cannot publish into the `@deepseek-ai` scope ourselves.
 
@@ -80,6 +80,20 @@ Read a session's current status without waiting: `{ status, pending_asks, pendin
 
 `context_usage` is derived from the **latest completed turn's** reported usage (fresh + cached input, plus that turn's output), with `max_tokens` from the model's `contextWindow` when the CLI reported one. It is an approximation of occupancy, not a live meter: it does not move while a turn is in flight, and it is absent entirely until a turn has reported usage.
 
+### `claude_code_list`
+
+List the sessions this composition is holding open — the one tool here that does **not** take a `session_id`, because it is the one you call when you do not have one.
+
+| Arg | Type | Notes |
+|---|---|---|
+| `include_closed` | boolean | Also list recently-closed sessions, each with `close_reason`. Defaults to false: only live sessions hold a concurrency slot. |
+
+Returns `{ sessions: [{ session_id, status, cwd, model?, age_ms, pending_asks, pending_ask_details[], close_reason? }] }`, **best close candidate first**: sessions with nothing pending on a human before ones a person is mid-decision on, idle before running, longest-idle first. A model that reads only the first row still reads the right one.
+
+Why it exists: `limits.maxConcurrentSessions` is enforced **service-wide**, and the seam service outlives any one dsh session. In the production trace, a fresh agent hit `SESSION_LIMIT` three times while believing it had opened two sessions — two slots were held by sessions from earlier runs, one parked 1h32m on an approval nobody answered — and, with no way to enumerate them, closed its own still-wanted plan session by guesswork. Call this after any `SESSION_LIMIT` (that refusal now carries the same inventory in its message), or whenever you need the id of a session you did not open.
+
+The rendered listing states plainly that the sessions holding slots may belong to **other dsh sessions sharing this host service**, and names which ones are blocked on a human so they are not closed by mistake. With nothing open it says so in a sentence, never as an empty table.
+
 ### `claude_code_cancel`
 
 Cancel the in-flight turn. `keep_queued` defaults to **true**: messages already queued behind the cancelled turn still run, exactly as the interrupt receipt promises. Pass `keep_queued: false` to suppress them too — **a dsh-side rule this integration enforces on top of the cancel, not a Claude Code CLI feature, and never persisted to the session's own settings** (the SDK advertises `interrupt_cancel_queued_v1` but exposes no way to drive it, so the seam emulates it by re-interrupting as surviving turns start). Returns `{ still_queued: string[] }`, reconciled from the receipt against the session's own outbox.
@@ -148,6 +162,20 @@ Fixed schema cost; small fixed result line. Cheap enough to poll, and the right 
 
 Same as `claude_code_open`.
 
+### `claude_code_list`
+
+#### What the model sees
+
+The generated schema (one optional `include_closed`) and a compact listing: a count line, one row per session (`<id>  <status>  open <duration>  [<model>]  <cwd>`), each blocked session's pending asks named underneath it, and a closing line saying that slots may be held by other dsh sessions on this host and which rows must not be closed. With nothing open it sees one sentence: `No Claude Code sessions are open in this composition…`.
+
+#### Token effect
+
+Fixed schema cost; the result grows with the number of live sessions, which is bounded by `limits.maxConcurrentSessions` (4 by default) — so a handful of lines, not an unbounded dump. Pending asks are named up to three per session, then summarized as `(+N more)`, so one heavily-blocked session cannot push the advice out of the window.
+
+#### KV Cache effect
+
+Same as `claude_code_open`.
+
 ### `claude_code_cancel`
 
 #### What the model sees
@@ -189,5 +217,7 @@ Same as `claude_code_open`.
 - **An elapsed wait cannot distinguish "blocked on a human" from "genuinely slow"** beyond what `pending_ask_details` says. An empty array means no ask is pending — the turn is just still thinking — and the rendered text says exactly that rather than implying somebody must act.
 - **`context_usage` is an approximation** derived from the last completed turn's usage, because neither the seam nor the SDK exposes a live context meter. It is absent rather than guessed before the first result.
 - **No `presentResult` presenters.** Each tool declares `presentCall` (a generic card) but no `presentResult`, so a completed call renders its `output.render` text. Cards for the tool calls Claude Code makes INSIDE a session (terminal for CC `Bash`, diff for CC `Write`/`Edit`) are a different thing and are not representable in rc.7 — the projections live in the seam (`presentCcToolCall`/`presentCcToolResult`) with the full evidence trail; a dsh card is derived by a tool-registry name lookup, and CC's tool names are not registered.
-- **`claude_code_status` is the only tool that answers for a closed session.** It reports `status` plus `close_reason` (`closed` / `exited` / `crashed`) for a session the seam still holds a tombstone for. `claude_code_send` / `_wait` / `_cancel` keep failing `CC_NO_SESSION`, because they need a live actor and the remedy really is "open one". Status is the call whose whole purpose is "what happened to it?" — answering `CC_NO_SESSION` there says "it was never opened here", which sends the model off to open a second session.
+- **`claude_code_status` is the only tool that answers for a closed session.** It reports `status` plus `close_reason` (`closed` / `exited` / `crashed` / `reaped`) for a session the seam still holds a tombstone for. `claude_code_send` / `_wait` / `_cancel` keep failing `CC_NO_SESSION`, because they need a live actor and the remedy really is "open one". Status is the call whose whole purpose is "what happened to it?" — answering `CC_NO_SESSION` there says "it was never opened here", which sends the model off to open a second session.
+- **`claude_code_list` sees only THIS composition's sessions.** It reads `ctx.claudeCode.list()`, which is the seam service's own registry. If two dsh processes each mount their own seam against the same machine, neither can enumerate the other's subprocesses — and `limits.maxConcurrentSessions` is per service, so that split is also where the cap stops being shared. Within one host service (the deployment shape the production trace ran on) the listing is complete, which is exactly the case that was unobservable before.
+- **`age_ms` is wall-clock age, not work done.** A session opened an hour ago that answered one prompt and a session that has been streaming for an hour look the same on that field; `status` and the pending asks are what separate them, which is why the ordering uses those first and the age only to break ties.
 - **Background mode is capped by the jobs runtime, not by us.** `@deepseek-ai/dsh-jobs-local` allows 10 concurrent jobs per owner by default; the eleventh `claude_code_open({ background: true })` fails `CC_JOB_REJECTED` with the registry's own remedy, having opened nothing. Raise it with the provider's `maxConcurrentJobsPerOwner`, not here.

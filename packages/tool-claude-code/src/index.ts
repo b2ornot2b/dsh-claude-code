@@ -1,6 +1,13 @@
 /**
  * Model-facing tools over the Claude Code capability seam (`ctx.claudeCode`):
- * open, send, wait, status, cancel, and close a Claude Code session.
+ * open, send, wait, status, list, cancel, and close a Claude Code session.
+ *
+ * **`claude_code_list` (the seventh tool) exists because every other one takes a
+ * `session_id`.** That made the only reachable sessions the ones the caller had
+ * personally opened and still remembered — while `limits.maxConcurrentSessions`
+ * is enforced SERVICE-WIDE and the service outlives any one dsh session. An
+ * agent could therefore be refused a slot by sessions it had no way to name. See
+ * `list.ts`.
  *
  * NAMED EXPORTS ONLY. A `default` export here would make the cordis Loader
  * unwrap the module to that single value and silently discard the sibling
@@ -61,6 +68,7 @@ import type {} from '@deepseek-ai/dsh-jobs'
 
 import { startBackgroundSession } from './background.ts'
 import { abortedError, errorCode } from './errors.ts'
+import { projectSessions, renderSessionList, SESSION_LIST_SCHEMA } from './list.ts'
 import { noSuchSession, openSession, requireSession } from './open.ts'
 import {
   answerInDshUi, PENDING_ASK_DETAILS_SCHEMA, projectPendingAsks, renderPendingAsks, renderStillRunning,
@@ -536,6 +544,44 @@ export function apply(ctx: Context, _config: Config = {}): void {
       })
     },
     presentCall: args => genericCall(`Claude Code session ${args.session_id} status`),
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'claude_code_list',
+    description: 'List the Claude Code sessions this composition is holding open, best close candidate first: '
+      + 'id, working directory, status, how long each has been open, and which are BLOCKED on a human answering '
+      + 'a permission/question in the dsh UI. Call this when claude_code_open fails with SESSION_LIMIT, or '
+      + 'whenever you need a session id you did not open yourself — the concurrency limit is service-wide, so '
+      + 'sessions from OTHER dsh sessions sharing this host can be holding the slots. Set `include_closed: true` '
+      + 'to also see recently-closed sessions and why each one ended.',
+    parameters: {
+      include_closed: {
+        type: 'boolean',
+        description: 'Also list recently-closed sessions (with close_reason). Defaults to false: only live '
+          + 'sessions hold a concurrency slot.',
+      },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: { sessions: SESSION_LIST_SCHEMA },
+      },
+      render: (args, value) => [{
+        type: 'text',
+        text: renderSessionList(value.sessions, args.include_closed === true),
+      } satisfies ContentBlock],
+    },
+    async execute(args) {
+      // ONE clock reading for the whole listing, baked into the value: two rows
+      // measured against two `Date.now()` calls would report ages that disagree
+      // with each other by however long the projection took, and `render` must
+      // stay a pure function of what was logged.
+      const sessions = ctx.claudeCode.list(
+        args.include_closed === true ? { includeClosed: true } : {})
+      return await Promise.resolve({ sessions: projectSessions(sessions, Date.now()) })
+    },
+    presentCall: () => genericCall('List Claude Code sessions'),
   }))
 
   ctx.tools.register(defineTool({

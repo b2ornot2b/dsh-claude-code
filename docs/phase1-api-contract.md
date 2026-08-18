@@ -40,6 +40,15 @@ records six deliberate deviations from what Phase 1 froze, and the defect the
 unmount test found (a spawned agent outliving its own plugin, because cordis's
 `Service.ctx` is not the mounting fiber's context).
 
+**Updated by Phase 8 (the session inventory).** Three changes, all driven by the
+one defect the 13/13 production integration test surfaced — an agent refused a
+session slot by sessions it had no way to name. §4.1 gains `list(options?)` and
+the `SESSION_LIMIT` refusal's inventory (§4.4g); §4.4e gains a SEVENTH tool,
+`claude_code_list`; §5.x's config gains `limits.idleTimeoutMs` (default NULL —
+off, no timer installed) and `CcCloseReason` gains `reaped`. `CcSessionSnapshot`
+gains three required fields (`cwd`, `openedAt`, `lastActivityAt`), the only
+non-additive change in the set and the one everything else is built on.
+
 **Updated by Phase 3 (the mirror).** §4.4c is the mirror's whole surface —
 `CcMirror`, `attachMirror`, `CcMirrorSource`, the `claude-code/compact` custom
 event and `markEventIgnorable` — plus the new `CcSession.onSend` seam (§4.4b) it
@@ -232,14 +241,14 @@ packages on deliberately different planes:
 
 ## 4. The seam's exact export surface
 
-`import { … } from '@deepseek-ai/dsh-claude-code'`. **Fifty-one** runtime
+`import { … } from '@deepseek-ai/dsh-claude-code'`. **Sixty-six** runtime
 exports (pinned by `packages/claude-code/tests/exports.spec.ts` — Phase 2 added
 `CcSession`, `WarmPool`, `realBackend`, `createInputStream`, `resolveQueryOptions`,
 `buildSessionEnv`, `warmFingerprint`; Phase 3 added `CcMirror`, `attachMirror`,
 `CC_COMPACT_EVENT`, `markEventIgnorable`; Phase 4 added the ask channel —
 `CcAskRouter`, `CcAskTable`, `CcAskRules`, `applyAskFallback`, `mapQuestions`,
 `mapAnswers`, `describeCall`, `describeReason`, `askErrorCode`,
-`resolveRuleCachePath` and their constants) plus the types below. Nothing else
+`resolveRuleCachePath` and their constants; Phase 8 added the inventory — `buildSessionInventory`, `buildSessionLimitInfo`, `renderSessionLimit`, `sessionLimitError`, `selectReapable`, `formatDuration`, `INVENTORY_ASK_DETAIL_LIMIT`, `sweepIntervalMs`, `MIN_IDLE_SWEEP_MS`, `MAX_IDLE_SWEEP_MS`) plus the types below. Nothing else
 exists; nothing else will be added without updating this document.
 
 **No export references a Claude Agent SDK type.** `src/backend.ts` re-states, in
@@ -257,8 +266,8 @@ class ClaudeCodeService extends Service implements ClaudeCode {
   constructor(ctx: Context, config?: ClaudeCodeConfig)
   open(options: CcOpenOptions): Promise<CcSessionSnapshot>
   get(id: CcSessionId): CcSessionSnapshot | undefined   // live, else a recently-closed tombstone
-  list(): readonly CcSessionSnapshot[]                  // LIVE sessions only
-  close(id: CcSessionId): Promise<boolean>
+  list(options?: CcListOptions): readonly CcSessionSnapshot[]   // LIVE by default; includeClosed appends tombstones
+  close(id: CcSessionId, reason?: CcCloseReason): Promise<boolean>   // Phase 8: reason defaults to 'closed'
   accountInfo(): Promise<CcAccountInfo>
   // Phase 3:
   attachMirror(id: CcSessionId, session: Session, options?: CcMirrorOptions): CcMirrorHandle
@@ -287,10 +296,10 @@ gone; `session(id)` is new):
 
 | Call | Phase 2 |
 |---|---|
-| `open(options)` | opens/resumes/forks a real session and resolves with its snapshot. Rejects `INVALID_CWD` (relative or missing `cwd`, checked before any spawn), `SESSION_LIMIT` (`limits.maxConcurrentSessions` reached), `SESSION_EXISTS` (a plain resume of a session still open here), `BACKEND_ERROR` (the SDK could not start) |
+| `open(options)` | opens/resumes/forks a real session and resolves with its snapshot. Rejects `INVALID_CWD` (relative or missing `cwd`, checked before any spawn), `SESSION_LIMIT` (`limits.maxConcurrentSessions` reached — the rejection carries the full live-session inventory in its message AND on `error.data.sessionLimit`, §4.4g), `SESSION_EXISTS` (a plain resume of a session still open here), `BACKEND_ERROR` (the SDK could not start) |
 | `get(id)` | the LIVE snapshot (status/model move under you), `undefined` when unknown |
-| `list()` | every live session in open order, fresh array each call |
-| `close(id)` | `true` when a session was closed, `false` for an unknown id; idempotent |
+| `list(options?)` | every live session in open order, fresh array each call. `{ includeClosed: true }` appends the recently-closed tombstones (oldest first); omitted still means LIVE ONLY, which is what this service's own slot accounting depends on. **At most one entry per id, either way**: a plain resume continues under the SAME id it resumes, so a session closed and then resumed here holds both a record and a tombstone — the LIVE one wins, exactly as in `get()`, because listing both would report one session twice, once as `closed`, with the corpse's `closeReason` on the row a caller is about to send to |
+| `close(id, reason?)` | `true` when a session was closed, `false` for an unknown id; idempotent. `reason` defaults to `'closed'`; the idle sweep passes `'reaped'` |
 | `session(id)` | the `CcSession` actor, or `undefined`. **A handle, not a value** — never put it in a tool result, never identity-compare it across a service access |
 | `accountInfo()` | the first live session's cached account; rejects `NO_LIVE_SESSION` when nothing is open (it never spawns a session to answer) |
 | `attachMirror(id, session, opts?)` | (Phase 3) mirrors a live session into a dsh session log; throws `UNKNOWN_SESSION` for an unregistered id. When the CC session closes the mirror is FINALIZED (a turn left open by a mid-turn death is closed as `aborted`/`disposed`) and then detached |
@@ -350,6 +359,9 @@ interface CcOpenOptions {
 interface CcSessionSnapshot {
   readonly id: CcSessionId
   readonly status: CcSessionStatus
+  readonly cwd: string                    // Phase 8 — REQUIRED; what tells two sessions apart
+  readonly openedAt: number               // Phase 8 — epoch ms
+  readonly lastActivityAt: number         // Phase 8 — epoch ms of the last send/message/close
   readonly model?: string                 // ABSENT until the SDK reports one
   readonly pendingAsks: number
   readonly pendingAskDetails: readonly CcPendingAsk[]   // WHAT is pending; [] when nothing is
@@ -386,10 +398,14 @@ type CcErrorCode = 'NOT_IMPLEMENTED' | 'UNKNOWN_SESSION' | 'SESSION_LIMIT'
                  | 'ASK_UNAVAILABLE'       // (Phase 4) the session was built without an ask channel
 
 class ClaudeCodeError extends HarnessError {              // HarnessError from @deepseek-ai/dsh-llm
-  constructor(message: string, code: CcErrorCode, options?: ErrorOptions)
+  constructor(message: string, code: CcErrorCode, options?: ClaudeCodeErrorOptions)
   readonly code: string                                   // route on this, never on the message
+  readonly data: CcErrorData | undefined                  // Phase 8 — structured specifics; see §4.4g
   readonly name: 'ClaudeCodeError'
 }
+
+interface ClaudeCodeErrorOptions extends ErrorOptions { readonly data?: CcErrorData }
+interface CcErrorData { readonly sessionLimit?: CcSessionLimitInfo }
 ```
 
 ### 4.4b The session actor (Phase 2)
@@ -439,9 +455,10 @@ differs, which is what keeps the two paths from drifting:
 | `closed` | `claude_code_close`, `ClaudeCode.close()`, owner disposal, plugin teardown | somebody asked |
 | `exited` | the iterator completed with NO turn in flight | the subprocess ended between turns; every turn it was given ran |
 | `crashed` | the iterator completed with a turn in flight, or threw | the turn it was running will never produce a result |
+| `reaped` | the opt-in idle sweep (`limits.idleTimeoutMs`) reclaimed it | nobody asked, and nothing was lost: it was idle with NO pending ask for longer than the configured ceiling. Mechanically identical to `closed` |
 
 `closeReason` is an ADDITIVE optional field on `CcSessionSnapshot`, present
-exactly when `status` is `closed`. `status` still collapses all three, because
+exactly when `status` is `closed`. `status` still collapses all four, because
 for anything asking "can I still send to this?" they are the same answer.
 
 **The close is armed as a continuation on the settled pump promise, never issued
@@ -940,7 +957,8 @@ Code ran.
 
 ### 4.4e The model-facing tools (Phase 5, `@deepseek-ai/dsh-tool-claude-code`)
 
-Six tools, all bodies live as of Phase 5. `inject: ['tools', 'claudeCode']`;
+SEVEN tools (Phase 8 added `claude_code_list`), all bodies live.
+`inject: ['tools', 'claudeCode']`;
 `ctx.sessions`, `ctx.agents` and `ctx.jobs` are read opportunistically with
 `ctx.get(...)` so the plugin still mounts in a composition that has none.
 
@@ -949,7 +967,8 @@ Six tools, all bodies live as of Phase 5. `inject: ['tools', 'claudeCode']`;
 | `claude_code_open` | `cwd`, `prompt?`, `model?`, `permission_mode?`, `resume?`, `fork?`, `background?` | `{ kind: 'session', session_id, status, result?, usage?, cost_usd?, pending_asks?, pending_ask_details? }` **or** `{ kind: 'background', jobId, ccSessionId }` |
 | `claude_code_send` | `session_id`, `message`, `mode: 'followup'\|'steer'` | `{ status }` |
 | `claude_code_wait` | `session_id`, `timeout_ms?` | `{ status, result?, usage?, cost_usd? }` **or**, when the wait elapsed, `{ status: 'running', session_id, pending_asks, pending_ask_details }` |
-| `claude_code_status` | `session_id` | `{ status, pending_asks, pending_ask_details, context_usage? }` |
+| `claude_code_status` | `session_id` | `{ status, close_reason?, pending_asks, pending_ask_details, context_usage? }` |
+| `claude_code_list` | `include_closed?` | `{ sessions: [{ session_id, status, cwd, model?, age_ms, pending_asks, pending_ask_details[], close_reason? }] }` — sorted best-close-candidate first (§4.4g) |
 | `claude_code_cancel` | `session_id`, `keep_queued?` | `{ still_queued: string[] }` |
 | `claude_code_close` | `session_id` | `{ closed: true }` |
 
@@ -1089,6 +1108,101 @@ from `modelUsage[*].contextWindow` — the cheapest REAL source, documented as a
 approximation (a snapshot of the last completed turn, not a live meter). It is
 ABSENT until a turn has reported usage; `CcSessionSnapshot.contextUsage` wins
 whenever a future phase starts populating it.
+
+### 4.4g The session inventory and idle reaping (Phase 8)
+
+One production defect, three changes. `limits.maxConcurrentSessions` is enforced
+**service-wide**, and the seam service outlives any one dsh session: in the 13/13
+integration run, an agent hit `SESSION_LIMIT` three times while believing it had
+opened two sessions. Two slots were held by sessions from EARLIER runs of the
+same host service, one parked 1h32m on a permission prompt nobody answered (an
+interactive ask has no timeout, by design). The refusal named only the limit, no
+tool enumerated sessions (`claude_code_status` needs an id the agent did not
+have), and the agent closed its own still-wanted plan session by guesswork.
+
+**1. The refusal inventories itself.**
+
+```ts
+interface CcSessionInventoryEntry {
+  readonly id: CcSessionId
+  readonly cwd: string
+  readonly status: CcSessionStatus
+  readonly model?: string
+  readonly ageMs: number            // now - openedAt, already subtracted
+  readonly idleMs: number           // now - lastActivityAt
+  readonly pendingAsks: number
+  readonly pendingAskDetails: readonly CcPendingAsk[]
+}
+
+interface CcSessionLimitInfo {
+  readonly limit: number
+  readonly liveCount: number
+  readonly sessions: readonly CcSessionInventoryEntry[]   // sorted, best candidate FIRST
+  readonly closeCandidate?: CcSessionId                   // ABSENT when every session has a pending ask
+}
+
+// Pure functions of (snapshots, now) — the clock is an argument, so prose and payload are replayable.
+function buildSessionInventory(sessions: readonly CcSessionSnapshot[], now: number): CcSessionInventoryEntry[]
+function buildSessionLimitInfo(sessions: readonly CcSessionSnapshot[], limit: number, now: number): CcSessionLimitInfo
+function renderSessionLimit(info: CcSessionLimitInfo): string
+function sessionLimitError(sessions: readonly CcSessionSnapshot[], limit: number, now: number): ClaudeCodeError
+function selectReapable(sessions: readonly CcSessionSnapshot[], idleTimeoutMs: number, now: number): CcSessionId[]
+function isReapable(session: CcSessionSnapshot, idleTimeoutMs: number, now: number): boolean
+function formatDuration(ms: number): string
+const INVENTORY_ASK_DETAIL_LIMIT = 3
+```
+
+`open()` throws `sessionLimitError(this.list(), limit, Date.now())`: message and
+`error.data.sessionLimit` are built from ONE projection, so they cannot disagree
+(a spec asserts `error.message === renderSessionLimit(error.data.sessionLimit)`).
+
+**The sort order is the contract**, in this precedence: sessions with a pending
+human ask LAST (a person may be mid-decision; closing one denies their tool
+call), actively `running`/`starting` behind `idle` (closing one kills a turn),
+and longest-idle first within a rank, then oldest, then by id for a total order.
+`closeCandidate` is the first entry with **zero** pending asks — not simply the
+first — and is absent when there is none, because "least bad" is not a
+recommendation. The prose says, explicitly, that the listed sessions may belong
+to OTHER dsh sessions sharing this host service: that is the exact fact the
+production agent could not deduce.
+
+**2. `claude_code_list`** (§4.4e) exposes the same inventory on demand — the
+service always had `list()`, the model never had a way to reach it, and every
+other tool takes a `session_id` the caller must already know.
+
+**3. Opt-in idle reaping.** `limits.idleTimeoutMs` — **default NULL, and null
+means no timer is installed at all**, asserted with fake timers
+(`vi.getTimerCount() === 0` after a mount without the key). When set, ONE
+service-wide `setInterval` owned by `ctx.effect` (never a per-session timer:
+the activity clock moves on every send and every received message, so per-session
+timers would mean a re-arm per SDK message) sweeps at
+`sweepIntervalMs(idleTimeoutMs)` = a quarter of the ceiling clamped to
+`[MIN_IDLE_SWEEP_MS, MAX_IDLE_SWEEP_MS]` = `[250, 60000]` ms, and is `unref`'d.
+
+A session is reaped iff it is `idle`, has **zero pending asks**, and
+`now - lastActivityAt >= idleTimeoutMs`. It is closed through
+`close(id, 'reaped')` — the same sequence `claude_code_close` runs, so asks are
+settled, the mirror is finalized, the tombstone is recorded and waiters settle
+identically — and every reap is logged with the session, its idle age and the
+ceiling. **A session with a pending ask is NEVER reaped**, however long it has
+sat: that is a human still deciding, and it is the very state that produced the
+1h32m session.
+
+Eligibility is re-asked **per session, immediately before each close**, through
+`isReapable` — the same predicate `selectReapable` filters on. The sweep awaits
+every close, so each session after the first is acted on across at least one turn
+of the event loop, and a permission ask raised by the subprocess (or a `send()`
+from a tool call) lands in exactly that gap; without the re-check the sweep would
+close a session on the strength of a selection taken before the human was asked
+anything. The re-check and the `close()` run in one synchronous block —
+`close()` deregisters before its first `await` — so nothing can slip between
+them. A session the sweep spares is logged, like one it reaps.
+
+`CcSessionSnapshot` grew the three fields all of this reads (`cwd`, `openedAt`,
+`lastActivityAt`), REQUIRED rather than optional because the seam always knows
+them and an inventory of `undefined`s helps nobody. `lastActivityAt` moves on a
+send, on a received message, and on close — **never on a read**, or a caller
+polling `claude_code_status` would keep an abandoned session alive forever.
 
 ### 4.4f The Agent adapter (Phase 6, `@deepseek-ai/dsh-claude-code-agent`)
 
@@ -1272,7 +1386,9 @@ interface CcAskRuleConfig {
 interface CcLimitsConfig {
   readonly maxConcurrentSessions?: number
   readonly maxBudgetUsd?: number
+  readonly idleTimeoutMs?: number                    // Phase 8 — NO default; unset = reaping OFF
 }
+interface CcListOptions { readonly includeClosed?: boolean }
 ```
 
 Resolved type (what `ctx.claudeCode.config` is — defaulted fields required,
@@ -1301,6 +1417,7 @@ interface ResolvedClaudeCodeConfig {
   readonly limits: {
     readonly maxConcurrentSessions: number       // 4
     readonly maxBudgetUsd?: number
+    readonly idleTimeoutMs?: number              // ABSENT = idle reaping off (the default)
   }
   readonly env: Readonly<Record<string, string>> // {}
 }
@@ -1540,7 +1657,7 @@ whole channel exists to hold.
 31. **The jobs-ABSENT composition was untested end to end.** `tests/composition`
     booted only the jobs-mounted `cordis.yml`. A sibling `cordis-no-jobs.yml`
     now boots the same rows without `dsh-jobs-local`/`dsh-tool-jobs` and pins
-    the supported shape: all six tools register, no `job_*` tool does,
+    the supported shape: all seven tools register, no `job_*` tool does,
     `ctx.jobs` is undefined, and `background: true` with a VALID `cwd` fails
     `CC_NO_JOBS` having spawned nothing (proving the jobs check precedes the
     open).
@@ -2040,7 +2157,7 @@ consumer package is exercised the way a deployment exercises it.
 - `tests/composition/composition.spec.ts` — boots it through
   `cordis-plugin-loader` + the `include`/`group` builtins, patterned on
   `spikes/composition/spike-loader.mjs`. It asserts every row activated, that
-  `ctx.claudeCode` reports the configured values, that all six `claude_code_*`
+  `ctx.claudeCode` reports the configured values, that all seven `claude_code_*`
   tools are registered with complete parameter/output schemas, that the agent
   adapter's mount marker was logged (proof `inject: ['agents', 'claudeCode']`
   was satisfied), that **nothing** on the mount path throws `NOT_IMPLEMENTED`

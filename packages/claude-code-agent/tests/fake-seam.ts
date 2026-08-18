@@ -110,6 +110,8 @@ export class FakeCcSession implements CcAgentSession {
   #status: CcSessionStatus = 'starting'
   #model: string | undefined
   #counter = 0
+  /** A fixed origin for the snapshot's clock fields; this double has no lifetime of its own. */
+  readonly #openedAt = Date.now()
   readonly #outbox = new Map<CcUuid, CcOutboxEntry>()
   readonly #messageListeners = new Set<(envelope: CcMessageEnvelope) => void>()
   readonly #closeListeners = new Set<() => void>()
@@ -191,6 +193,9 @@ export class FakeCcSession implements CcAgentSession {
     return {
       id: this.id,
       status: this.#status,
+      cwd: '/fake/cwd',
+      openedAt: this.#openedAt,
+      lastActivityAt: this.#openedAt,
       ...(this.#model === undefined ? {} : { model: this.#model }),
       pendingAsks: 0,
       // This double never routes an ask, so nothing can ever be pending on it.

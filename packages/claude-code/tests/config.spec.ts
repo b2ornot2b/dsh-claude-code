@@ -56,6 +56,9 @@ describe('resolveClaudeCodeConfig defaults', () => {
     expect('timeoutMs' in resolved.ask).toBe(false)
     expect('ruleCachePath' in resolved.ask).toBe(false)
     expect('maxBudgetUsd' in resolved.limits).toBe(false)
+    // The one whose absence is BEHAVIOUR, not just tidiness: unset means no
+    // idle sweep is installed at all.
+    expect('idleTimeoutMs' in resolved.limits).toBe(false)
   })
 
   it('treats an explicit YAML null exactly like an omitted key', () => {
@@ -63,7 +66,7 @@ describe('resolveClaudeCodeConfig defaults', () => {
       executablePath: null,
       defaults: { model: null, appendSystemPrompt: null },
       ask: { timeoutMs: null, ruleCachePath: null },
-      limits: { maxBudgetUsd: null },
+      limits: { maxBudgetUsd: null, idleTimeoutMs: null },
     }))
     expect(resolved).toEqual(resolveClaudeCodeConfig())
   })
@@ -113,6 +116,11 @@ describe('resolveClaudeCodeConfig defaults', () => {
     expect(resolved.env).toEqual({ CLAUDE_CODE_MAX_RETRIES: '2' })
   })
 
+  it('keeps an explicitly configured idle timeout', () => {
+    expect(resolveClaudeCodeConfig({ limits: { idleTimeoutMs: 900_000 } }).limits)
+      .toEqual({ maxConcurrentSessions: DEFAULT_MAX_CONCURRENT_SESSIONS, idleTimeoutMs: 900_000 })
+  })
+
   it('fills only the missing keys of a partially supplied section', () => {
     const resolved = resolveClaudeCodeConfig({ ask: { fallback: 'error' } })
     expect(resolved.ask.fallback).toBe('error')
@@ -132,6 +140,8 @@ describe('resolveClaudeCodeConfig rejections', () => {
     ['a fractional concurrency limit', { limits: { maxConcurrentSessions: 1.5 } }],
     ['a non-positive ask timeout', { ask: { timeoutMs: 0 } }],
     ['a negative budget', { limits: { maxBudgetUsd: -1 } }],
+    ['a zero idle timeout', { limits: { idleTimeoutMs: 0 } }],
+    ['a negative idle timeout', { limits: { idleTimeoutMs: -1 } }],
     ['a non-string env value', { env: { API_TIMEOUT_MS: 5000 } }],
   ])('rejects %s', (_label, value) => {
     expect(() => resolveClaudeCodeConfig(asConfig(value))).toThrow()

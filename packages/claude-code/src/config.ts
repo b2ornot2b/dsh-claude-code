@@ -95,6 +95,22 @@ export interface CcLimitsConfig {
   readonly maxConcurrentSessions?: number
   /** Optional spend ceiling in USD across the composition's sessions. Unset means no ceiling. */
   readonly maxBudgetUsd?: number
+  /**
+   * Close a session that has been idle, with NOTHING pending on a human, for
+   * this many milliseconds. **UNSET BY DEFAULT, and unset means off** — no
+   * timer is installed at all, and no session is ever reclaimed. An operator who
+   * did not ask for reaping gets exactly the behaviour they had before this
+   * option existed.
+   *
+   * Set it when a long-lived host service is handing `maxConcurrentSessions`
+   * slots to short-lived dsh sessions that do not always close their own work:
+   * the slots are service-wide, so one abandoned session denies every later one.
+   *
+   * A session with a PENDING ASK is never reaped, no matter how long it has sat:
+   * that is a human still deciding, and it is exactly the state that produced
+   * the 1h32m session this option exists to clean up after.
+   */
+  readonly idleTimeoutMs?: number
 }
 
 /**
@@ -164,6 +180,8 @@ export interface ResolvedClaudeCodeConfig {
   readonly limits: {
     readonly maxConcurrentSessions: number
     readonly maxBudgetUsd?: number
+    /** ABSENT when idle reaping is off, which is the default. */
+    readonly idleTimeoutMs?: number
   }
   readonly env: Readonly<Record<string, string>>
 }
@@ -199,6 +217,10 @@ export const Config: z<ClaudeCodeConfig> = z.object({
   limits: z.object({
     maxConcurrentSessions: z.number().step(1).min(1).default(DEFAULT_MAX_CONCURRENT_SESSIONS),
     maxBudgetUsd: z.number().min(0),
+    // NO `.default(...)`: the absence of this key is the "off" signal the
+    // service branches on, and a default here would silently start reaping
+    // sessions in every composition that already exists.
+    idleTimeoutMs: z.number().min(1),
   }),
   env: z.dict(z.string()).default({}),
 })
@@ -253,6 +275,7 @@ export function resolveClaudeCodeConfig(config: ClaudeCodeConfig = {}): Resolved
     limits: {
       maxConcurrentSessions: limits.maxConcurrentSessions ?? DEFAULT_MAX_CONCURRENT_SESSIONS,
       ...optional('maxBudgetUsd', limits.maxBudgetUsd),
+      ...optional('idleTimeoutMs', limits.idleTimeoutMs),
     },
     env: parsed.env ?? {},
   }

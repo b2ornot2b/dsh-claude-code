@@ -1,8 +1,8 @@
 import { tmpdir } from 'node:os'
 
 import { Context } from '@deepseek-ai/cordis'
-import { ClaudeCodeService } from '@deepseek-ai/dsh-claude-code'
-import type { ClaudeCodeConfig, ClaudeCodeServiceDeps } from '@deepseek-ai/dsh-claude-code'
+import { ClaudeCodeService, CLOSED_SESSION_HISTORY } from '@deepseek-ai/dsh-claude-code'
+import type { CcSessionId, ClaudeCodeConfig, ClaudeCodeServiceDeps } from '@deepseek-ai/dsh-claude-code'
 import { describe, expect, it } from 'vitest'
 
 import { createFakeBackend, settle } from './fake-backend.ts'
@@ -172,6 +172,72 @@ describe('ClaudeCodeService registry lifecycle', () => {
     expect(fake.queries.every(query => query.closed)).toBe(true)
     expect(fake.warms.every(warm => warm.closed || warm.used !== undefined)).toBe(true)
     expect(service.list()).toEqual([])
+  })
+})
+
+describe('ClaudeCodeService.list({ includeClosed })', () => {
+  it('appends the tombstones, and leaves the default listing live-only', async () => {
+    const { service, dispose } = await mount({ prewarm: false })
+    try {
+      const gone = await service.open({ cwd: CWD })
+      await service.close(gone.id)
+      const live = await service.open({ cwd: CWD })
+
+      // The default is what `open()`'s own slot accounting depends on: a caller
+      // counting against `limits.maxConcurrentSessions` must not count corpses.
+      expect(service.list().map(entry => entry.id)).toEqual([live.id])
+      expect(service.list({ includeClosed: true }).map(entry => entry.id)).toEqual([live.id, gone.id])
+      expect(service.list({ includeClosed: true }).find(entry => entry.id === gone.id))
+        .toMatchObject({ status: 'closed', closeReason: 'closed' })
+    } finally {
+      await dispose()
+    }
+  })
+
+  it('reports a resumed id ONCE — live — and not also as its own corpse', async () => {
+    // A plain resume continues under the SAME id it resumes, so a session closed
+    // here and then resumed here holds both a registry record and a tombstone.
+    // Listing both would show one session twice, once as `closed`, and hang the
+    // corpse's `closeReason` on the row a caller is about to send to.
+    const { service, dispose } = await mount({ prewarm: false })
+    try {
+      const first = await service.open({ cwd: CWD })
+      await service.close(first.id)
+      const resumed = await service.open({ cwd: CWD, resume: first.id })
+      expect(resumed.id).toBe(first.id)
+
+      const listed = service.list({ includeClosed: true })
+      expect(listed.map(entry => entry.id)).toEqual([first.id])
+      expect(listed[0]?.status).not.toBe('closed')
+      expect(listed[0]?.closeReason).toBeUndefined()
+    } finally {
+      await dispose()
+    }
+  })
+
+  it('never resurrects an evicted tombstone', async () => {
+    // The tombstone table is a bounded courtesy, not a history. Once an entry is
+    // evicted it must be gone from every read, or the bound is decorative.
+    const { service, dispose } = await mount({ prewarm: false })
+    try {
+      const ids: CcSessionId[] = []
+      for (let index = 0; index <= CLOSED_SESSION_HISTORY; index += 1) {
+        const opened = await service.open({ cwd: CWD })
+        ids.push(opened.id)
+        await service.close(opened.id)
+      }
+      const evicted = ids[0]
+      if (evicted === undefined) throw new Error('no sessions were opened')
+
+      const listed = service.list({ includeClosed: true })
+      expect(listed).toHaveLength(CLOSED_SESSION_HISTORY)
+      expect(listed.map(entry => entry.id)).not.toContain(evicted)
+      expect(service.get(evicted)).toBeUndefined()
+      // The newest close is still answerable, so the bound trimmed the right end.
+      expect(listed.map(entry => entry.id)).toContain(ids[ids.length - 1])
+    } finally {
+      await dispose()
+    }
   })
 })
 
