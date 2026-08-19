@@ -2,7 +2,7 @@
 
 Review of `docs/dsh-claude-code-integration.md` performed 2026-08-17 against:
 
-- **dsh**: `/Users/b2/Developer/3rd_party/deepseek-harness` working tree (v0.1.0-rc.5; npm latest is rc.7)
+- **dsh**: a local `<harness-checkout>` working tree (v0.1.0-rc.5; npm latest is rc.7)
 - **SDK**: `@anthropic-ai/claude-agent-sdk@0.3.233` (installed fresh and inspected; harness pins 0.3.220)
 - **CLI**: Claude Code 2.1.233, logged in via claude.ai Max subscription
 - **Live probes**: two real SDK sessions (plan-mode `ExitPlanMode`, `AskUserQuestion` round trip)
@@ -357,6 +357,12 @@ keyless + with-key smoke split; upstreaming decision (PR into harness vs. publis
 ---
 
 ## 8. Project completion status
+
+> **Dated record — see the [README](../README.md) for current totals.** This section was written
+> at the Phase 7 merge point and its measurements (tool count, test counts) are true *as of that
+> date*. Work landed afterwards from production use: a seventh tool (`claude_code_list`), pollable
+> waits, human-decision receipts, and session-limit inventory. The numbers below are left
+> unedited on purpose — this is a historical record, not a status page.
 
 **All eight phases are complete.** Written at the Phase 7 Stage 3 (final verification) merge
 point. This section is the project's closing record: what each phase actually produced, the
