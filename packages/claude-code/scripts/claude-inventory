@@ -180,9 +180,15 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     warnings = []
-    live = read_live(args.home, warnings)
-    resumable = read_resumable(args.home, args.window_ms, args.max_resumable,
-                               not args.no_titles, warnings)
+    claude_dir = os.path.join(args.home, ".claude")
+    if not os.path.isdir(claude_dir):
+        # Not an error: a mesh host may simply never have run Claude Code.
+        warnings.append("%s: no Claude Code state directory on this host" % claude_dir)
+        live, resumable = [], []
+    else:
+        live = read_live(args.home, warnings)
+        resumable = read_resumable(args.home, args.window_ms, args.max_resumable,
+                                   not args.no_titles, warnings)
     versions = [row["version"] for row in live if row.get("version")]
     out = {"schema": SCHEMA, "host": host_label(), "generatedAt": now_ms(),
            "home": args.home, "live": live, "resumable": resumable, "warnings": warnings}

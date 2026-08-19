@@ -154,3 +154,32 @@ describe('claude-inventory resumable sessions', () => {
     expect(scrubbed.every(entry => entry.title === undefined)).toBe(true)
   })
 })
+
+describe('claude-inventory degradation', () => {
+  it('succeeds with warnings when there is no ~/.claude at all', () => {
+    const home = mkdtempSync(join(tmpdir(), 'cc-probe-empty-'))
+
+    const out = runProbe(home)
+
+    expect(out.schema).toBe(1)
+    expect(out.live).toEqual([])
+    expect(out.resumable).toEqual([])
+    // "nothing here" and "I could not look" must never render alike.
+    expect(out.warnings.join('\n')).toContain('.claude')
+  })
+
+  it('warns about a malformed registry file without losing its siblings', () => {
+    const home = fixtureHome({
+      'good.json': {
+        pid: process.pid, sessionId: '66666666-6666-4666-8666-666666666666', cwd: '/tmp',
+      },
+    })
+    writeFileSync(join(home, '.claude', 'sessions', 'bad.json'), '{ not json')
+
+    const out = runProbe(home)
+
+    expect(out.live.map(entry => entry.sessionId))
+      .toEqual(['66666666-6666-4666-8666-666666666666'])
+    expect(out.warnings.join('\n')).toContain('bad.json')
+  })
+})
