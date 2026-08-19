@@ -20,10 +20,12 @@ import type { Session as DshSession } from '@deepseek-ai/dsh-session'
 import { CcAskRouter } from './ask/router.ts'
 import { CcAskRules } from './ask/rules.ts'
 import type { CcAskServices, CcAskTarget } from './ask/types.ts'
-import { realBackend } from './backend.ts'
+import { listLocalStore, readLocalRegistry, realBackend } from './backend.ts'
 import type { CcCanUseTool, QueryBackend } from './backend.ts'
 import { Config as ConfigSchema, resolveClaudeCodeConfig } from './config.ts'
 import type { ClaudeCodeConfig, ResolvedClaudeCodeConfig } from './config.ts'
+import { createLocalSource } from './discovery-local.ts'
+import { mergeDiscovered, normalizeSourceClock, projectComposed } from './discovery.ts'
 import { formatDuration, isReapable, selectReapable, sessionLimitError } from './inventory.ts'
 import { attachMirror } from './mirror.ts'
 import type { CcMirrorHandle, CcMirrorOptions } from './mirror.ts'
@@ -32,7 +34,8 @@ import { CcSession, resolveQueryOptions } from './session.ts'
 import type { CcSessionDeps } from './session.ts'
 import { ClaudeCodeError, newCcSessionId } from './types.ts'
 import type {
-  CcAccountInfo, CcCloseReason, CcContextUsage, CcListOptions, CcLogger, CcOpenOptions, CcSessionId,
+  CcAccountInfo, CcCloseReason, CcContextUsage, CcDiscoveredSession, CcDiscoverOptions, CcDiscoverRequest,
+  CcDiscoveryResult, CcDiscoveryScope, CcDiscoverySource, CcListOptions, CcLogger, CcOpenOptions, CcSessionId,
   CcSessionSnapshot, CcSessionStatus, ClaudeCode,
 } from './types.ts'
 
@@ -100,6 +103,18 @@ export interface ClaudeCodeServiceDeps {
   readonly resolveApiKey?: () => Promise<string | undefined>
   /** Drain-loop poll interval handed to each session (tests shrink it). */
   readonly drainPollMs?: number
+  /**
+   * Skip wiring the real local discovery source (the SDK store + on-disk
+   * registry). Defaults to wiring it whenever `config.discovery.local` is
+   * true; unit tests pass `false` so nothing here ever touches `~/.claude`.
+   */
+  readonly wireLocalSource?: boolean
+  /**
+   * Replace the local discovery source outright, instead of the real one
+   * `backend.ts` builds from `listLocalStore`/`readLocalRegistry`. Ignored
+   * when `wireLocalSource` is `false`.
+   */
+  readonly localSource?: CcDiscoverySource
 }
 
 /**
@@ -143,6 +158,29 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
 
   /** Diagnostics sink handed to every session (subprocess stderr lands here). */
   private readonly log: CcLogger
+
+  /** Registered discovery sources, keyed by id (a duplicate id replaces its predecessor). */
+  private readonly discoverySources = new Map<string, CcDiscoverySource>()
+
+  /**
+   * The last merged wide-scope result PER REQUEST SHAPE, for
+   * `config.discovery.cacheTtlMs`.
+   *
+   * Keyed by {@link discoveryCacheKey} — everything that changes what a
+   * source is actually asked for (`scope`, `includeResumable`). Without this,
+   * a `scope: 'host'` result could be served back as a cache hit to a
+   * subsequent `scope: 'mesh'` call inside the TTL: a caller asking about the
+   * whole mesh would silently get only this host's sessions, marked
+   * `cached: true` with no warning that the answer had been narrowed. The
+   * same hazard applies to `includeResumable`.
+   *
+   * Each entry holds ONLY the external (`live-external`/`resumable`) sessions,
+   * never the composed ones: composed sessions are re-projected fresh on
+   * every {@link ClaudeCodeService.discover} call regardless of cache state,
+   * because they are free (no source to query) and change fastest — a cached
+   * one could name a session that has since closed.
+   */
+  private readonly discoveryCache = new Map<string, { at: number, result: CcDiscoveryResult }>()
 
   /**
    * @param ctx - the context that owns the service; disposal closes every session.
@@ -195,6 +233,20 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
         }
       }, 'claudeCode:idleSweep')
     }
+
+    // The real local source reads the SDK store and the on-disk registry
+    // (`backend.ts`, the only place in this package permitted to touch the
+    // SDK). Unit tests pass `wireLocalSource: false` and register their own
+    // fakes instead, so no unit test in this repo ever reads this machine's
+    // real `~/.claude`.
+    if (deps.wireLocalSource !== false && this.config.discovery.local) {
+      const source = deps.localSource ?? createLocalSource({
+        host: this.config.hostLabel,
+        listSessions: async options => listLocalStore(options),
+        readRegistry: async () => readLocalRegistry(),
+      })
+      ctx.effect(() => this.registerDiscoverySource(source), 'claudeCode:localDiscovery')
+    }
   }
 
   /**
@@ -205,14 +257,21 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
    *
    * @param options - working directory, first prompt, model, permission mode, resume/fork.
    * @returns the new session's snapshot, taken after the initialize handshake.
-   * @throws {ClaudeCodeError} code `INVALID_CWD` when `cwd` is not an existing
+   * @throws {ClaudeCodeError} code `INVALID_CWD` when `cwd` is omitted without
+   *   `resume`, or when the given (or discovered) cwd is not an existing
    *   absolute directory (checked BEFORE anything spawns), `SESSION_LIMIT` when
    *   `limits.maxConcurrentSessions` is already reached, `SESSION_EXISTS` when a
-   *   plain resume targets a session that is still open here, or `BACKEND_ERROR`
-   *   when the SDK fails to start the session.
+   *   plain resume targets a session that is still open here,
+   *   `SESSION_LIVE_ELSEWHERE` when a plain resume targets a session discovery
+   *   reports running in another terminal or on another mesh host, or
+   *   `BACKEND_ERROR` when the SDK fails to start the session.
    */
   async open(options: CcOpenOptions): Promise<CcSessionSnapshot> {
-    assertUsableCwd(options.cwd)
+    // A resumed session already has a working directory; making the caller
+    // restate it invites a wrong guess, and a wrong cwd is the failure mode
+    // that wrote proof.txt into $HOME instead of the repo.
+    const cwd = options.cwd ?? await this.resumeCwd(options.resume)
+    assertUsableCwd(cwd)
     const limit = this.config.limits.maxConcurrentSessions
     if (this.sessions.size >= limit) {
       // The refusal INVENTORIES what is holding the slots — see `inventory.ts`
@@ -231,6 +290,26 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
         'SESSION_EXISTS')
     }
 
+    // SESSION_EXISTS only knows about sessions THIS composition opened. A
+    // session running in another terminal or on another host is invisible to
+    // it, and appending to a transcript another live process is writing
+    // corrupts it. Forking is always safe, so the refusal names that way out.
+    // Cached, same as `resumeCwd` above — a resume must not force a fresh
+    // probe of every mesh host on top of the one discovery already ran.
+    if (options.resume !== undefined && options.fork !== true) {
+      const elsewhere = (await this.discover({ scope: 'mesh' })).sessions
+        .find(session => session.sessionId === options.resume && session.origin === 'live-external')
+      if (elsewhere !== undefined) {
+        throw new ClaudeCodeError(
+          `claude-code: session ${options.resume} is running on ${elsewhere.host}`
+          + `${elsewhere.live?.pid === undefined ? '' : ` (pid ${elsewhere.live.pid})`}`
+          + `${elsewhere.title === undefined ? '' : ` — "${elsewhere.title}"`}. `
+          + 'Continuing it would put two processes writing one transcript. '
+          + 'Pass fork: true to branch from it instead; the original is left untouched.',
+          'SESSION_LIVE_ELSEWHERE')
+      }
+    }
+
     // The pool template is deliberately resume-FREE. `warmFingerprint` excludes
     // `resume`/`forkSession` (so a pre-minted id can be adopted), which means a
     // subprocess warmed with either one baked in would be indistinguishable from
@@ -238,7 +317,7 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
     // handle is therefore always a PLAIN session of this shape: the equality key
     // for `acquire()` and the recipe for the next `prewarm()`, both.
     const poolShape = {
-      cwd: options.cwd,
+      cwd,
       ...(options.model === undefined ? {} : { model: options.model }),
       ...(options.permissionMode === undefined ? {} : { permissionMode: options.permissionMode }),
     }
@@ -268,7 +347,7 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
     const router = new CcAskRouter({
       services: this.askServices(),
       config: this.config,
-      rules: CcAskRules.forSession(this.config, options.cwd, this.log),
+      rules: CcAskRules.forSession(this.config, cwd, this.log),
       logger: this.log,
     })
     const session = new CcSession(
@@ -280,7 +359,7 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
 
     const record: CcSessionRecord = {
       id,
-      cwd: options.cwd,
+      cwd,
       openedAt: Date.now(),
       status: 'starting',
       pendingAsks: 0,
@@ -323,6 +402,32 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
     void this.pool.prewarm(template)
 
     return session.snapshot()
+  }
+
+  /**
+   * Find the working directory of a session being resumed.
+   *
+   * Consults the cache the same as any other `scope: 'mesh'` discovery call —
+   * never `refresh: true` — so a resume never forces a fresh probe of every
+   * mesh host on top of the one discovery already ran to list this session.
+   * @param resume - the session id to resume, if any.
+   * @returns the discovered cwd.
+   * @throws {ClaudeCodeError} code `INVALID_CWD` when there is no `resume` to
+   *   resolve from, or when discovery does not know the resumed session's cwd.
+   */
+  private async resumeCwd(resume: CcSessionId | undefined): Promise<string> {
+    if (resume === undefined) {
+      throw new ClaudeCodeError('claude-code: open requires a cwd unless resume is set', 'INVALID_CWD')
+    }
+    const found = (await this.discover({ scope: 'mesh' })).sessions
+      .find(session => session.sessionId === resume)
+    if (found === undefined || found.cwd === '') {
+      throw new ClaudeCodeError(
+        `claude-code: cannot resume ${resume}: no cwd was given and discovery does not know this session. `
+        + 'Pass cwd explicitly, or call claude_code_list with a wider scope first.',
+        'INVALID_CWD')
+    }
+    return found.cwd
   }
 
   /**
@@ -465,6 +570,162 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
         `claude-code: no session ${id} is registered in this context`, 'UNKNOWN_SESSION')
     }
     return actor.attachAskTarget(target)
+  }
+
+  /**
+   * Every session this composition can see, from every registered source.
+   *
+   * `scope: 'composition'` (the default) touches NO source at all — it only
+   * projects this composition's own `list()` — so every caller that predates
+   * discovery, and every caller that never asked for it, pays nothing beyond
+   * the inventory projection it already paid for `SESSION_LIMIT` (spec §6.2).
+   *
+   * Wider scopes query the registered sources IN PARALLEL against a shared
+   * clock reading and never reject: a source that throws or times out becomes
+   * a `warnings` entry instead, because a list that fails whenever one laptop
+   * is asleep is not a list anyone can use (design P6). The composed group is
+   * re-projected fresh on every call, cached or not — it is free (no source to
+   * query) and it is the group that goes stale fastest, so caching it would
+   * risk naming a session that has since closed.
+   *
+   * @param options - scope and cache control.
+   * @returns the merged, deduped, clock-normalized inventory.
+   */
+  async discover(options: CcDiscoverOptions = {}): Promise<CcDiscoveryResult> {
+    const now = Date.now()
+    const scope = options.scope ?? 'composition'
+    const composed = projectComposed(this.list(), this.config.hostLabel, now)
+    if (scope === 'composition') {
+      return { sessions: composed, warnings: [], generatedAt: now, cached: false }
+    }
+
+    const includeResumable = options.includeResumable ?? true
+    // Everything that changes what a source is actually asked for goes in the
+    // key: a cache hit must only ever serve a result gathered under the SAME
+    // request shape (see the field doc on `discoveryCache`).
+    const cacheKey = discoveryCacheKey(scope, includeResumable)
+    const cached = this.discoveryCache.get(cacheKey)
+    if (options.refresh !== true && cached !== undefined
+      && now - cached.at < this.config.discovery.cacheTtlMs) {
+      // Routed through the SAME merge the uncached path uses (Amendment 2):
+      // a session that is both composed and reported live by an external
+      // source must dedupe here too, or it would appear twice on every cache
+      // hit even though the uncached path never lets that happen.
+      return {
+        ...cached.result,
+        sessions: mergeDiscovered(composed, [[...cached.result.sessions]], now),
+        cached: true,
+      }
+    }
+
+    const sources = [...this.discoverySources.values()]
+      .filter(source => scope === 'mesh' || source.host === this.config.hostLabel)
+    const request: Omit<CcDiscoverRequest, 'signal'> = {
+      now,
+      includeResumable,
+      recentWindowMs: this.config.discovery.recentWindowMs,
+      maxResumable: this.config.discovery.maxResumable,
+      includeTitles: this.config.discovery.includeTitles,
+    }
+    const sourceTimeoutMs = this.config.discovery.sourceTimeoutMs
+    const warnings: string[] = []
+    // One deadline PER SOURCE, inside this parallel map — never around the
+    // whole `Promise.all` — so one hung host cannot delay the others' results.
+    const groups = await Promise.all(sources.map(async (source): Promise<CcDiscoveredSession[]> => {
+      try {
+        const result = await this.queryWithDeadline(source, request, sourceTimeoutMs)
+        return normalizeSourceClock(result, now)
+      } catch (error) {
+        warnings.push(`${source.host}: ${error instanceof Error ? error.message : String(error)}`)
+        return []
+      }
+    }))
+
+    // The cache stores ONLY the external sessions (never `composed`): they are
+    // what cost something to gather, and re-merging them against a freshly
+    // projected `composed` on the next call is how a closed composed session
+    // stops shadowing a cached external copy of itself.
+    const external = mergeDiscovered([], groups, now)
+    this.discoveryCache.set(cacheKey, {
+      at: now,
+      result: { sessions: external, warnings, generatedAt: now, cached: false },
+    })
+    return {
+      sessions: mergeDiscovered(composed, [external], now),
+      warnings,
+      generatedAt: now,
+      cached: false,
+    }
+  }
+
+  /**
+   * Contribute sessions from outside this composition (spec §6.1): a mesh
+   * host's probe, a container's forwarded inventory, or a test double.
+   *
+   * @param source - the source to add; a duplicate id replaces its predecessor.
+   * @returns a disposer that removes it and drops the cache, so the next
+   *   {@link ClaudeCodeService.discover} call never consults it again.
+   */
+  registerDiscoverySource(source: CcDiscoverySource): () => void {
+    this.discoverySources.set(source.id, source)
+    // The source SET changed, which invalidates every cached request shape,
+    // not just the one currently in flight — a `mesh` entry cached before
+    // this source existed is just as stale as a `host` one.
+    this.discoveryCache.clear()
+    return () => {
+      // Only remove THIS registration, identified by object, not by id: a
+      // second `registerDiscoverySource` call with the same id replaces the
+      // map entry, and the FIRST call's disposer must not be able to evict
+      // the second registration out from under it.
+      if (this.discoverySources.get(source.id) === source) {
+        this.discoverySources.delete(source.id)
+        this.discoveryCache.clear()
+      }
+    }
+  }
+
+  /**
+   * Query one source, bounded by `sourceTimeoutMs`.
+   *
+   * A rejection is already handled by the caller's `try`/`catch` — this exists
+   * for the failure mode a rejection does NOT cover: a source that never
+   * settles at all (a wedged child process, a stuck SSH connect with no
+   * transport timeout of its own). The source gets an `AbortController` so a
+   * well-behaved implementation can react and fail fast; the race against the
+   * deadline timer is what bounds it even if the source ignores the signal.
+   *
+   * @param source - the source to query.
+   * @param request - the shared request fields (`now`, window, limits); the
+   *   per-source `signal` is attached here, not by the caller.
+   * @param timeoutMs - how long to wait before giving up on this source.
+   * @returns the source's result.
+   * @throws whatever the source rejects with, or a timeout error naming the
+   *   elapsed limit once `timeoutMs` passes with nothing settled.
+   */
+  private async queryWithDeadline(
+    source: CcDiscoverySource,
+    request: Omit<CcDiscoverRequest, 'signal'>,
+    timeoutMs: number,
+  ): Promise<CcDiscoveryResult> {
+    const controller = new AbortController()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        controller.abort()
+        reject(new Error(`discovery timed out after ${timeoutMs}ms`))
+      }, timeoutMs)
+      // A pending per-source deadline must never be the reason a process
+      // refuses to exit — same posture as the idle-sweep timer above.
+      timer.unref?.()
+    })
+    try {
+      return await Promise.race([
+        source.discover({ ...request, signal: controller.signal }),
+        deadline,
+      ])
+    } finally {
+      if (timer !== undefined) clearTimeout(timer)
+    }
   }
 
   /**
@@ -655,6 +916,29 @@ export const MAX_IDLE_SWEEP_MS = 60_000
  */
 export function sweepIntervalMs(idleTimeoutMs: number): number {
   return Math.min(MAX_IDLE_SWEEP_MS, Math.max(MIN_IDLE_SWEEP_MS, Math.floor(idleTimeoutMs / 4)))
+}
+
+/**
+ * The `discoveryCache` key for one request shape.
+ *
+ * MUST cover every parameter that changes what a source is actually asked
+ * for — today that is `scope` (which sources get consulted at all: `host`
+ * queries a strict subset of what `mesh` does) and `includeResumable` (which
+ * changes the request each consulted source receives). Leaving either one out
+ * of the key would let a narrower result silently answer a wider request: a
+ * `scope: 'host'` result served back as a `scope: 'mesh'` cache hit would
+ * report only this host's sessions as if the whole mesh had been asked, with
+ * `cached: true` and no warning that the answer had been narrowed — the exact
+ * bug this key exists to rule out. `recentWindowMs`/`maxResumable`/
+ * `includeTitles` are deliberately NOT here: they come from `config.discovery`
+ * and never vary between calls on one service instance, so they cannot make
+ * two calls ask for different things.
+ * @param scope - the requested discovery scope (`'host'` or `'mesh'`; `'composition'` never reaches the cache).
+ * @param includeResumable - whether resumable sessions were requested.
+ * @returns a stable string key for this request shape.
+ */
+function discoveryCacheKey(scope: CcDiscoveryScope, includeResumable: boolean): string {
+  return `${scope}:${includeResumable}`
 }
 
 /**

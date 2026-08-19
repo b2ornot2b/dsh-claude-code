@@ -32,8 +32,11 @@ import { ClaudeCodeToolError } from './errors.ts'
 
 /** The `claude_code_open` arguments this module consumes, in the tool's own snake_case. */
 export interface CcOpenArgs {
-  /** Absolute working directory the session runs in. */
-  readonly cwd: string
+  /**
+   * Absolute working directory the session runs in. Required unless `resume`
+   * is set, in which case the seam resolves it from discovery.
+   */
+  readonly cwd?: string | undefined
   /** First user message; omitted opens an idle session. */
   readonly prompt?: string | undefined
   /** Model id override. */
@@ -79,7 +82,7 @@ export async function openSession(
   const ask = resolveAskTarget(ctx, exec)
   const permissionMode = readPermissionMode(args.permission_mode)
   const options: CcOpenOptions = {
-    cwd: args.cwd,
+    ...(args.cwd === undefined ? {} : { cwd: args.cwd }),
     ...(args.model === undefined ? {} : { model: args.model }),
     ...(permissionMode === undefined ? {} : { permissionMode }),
     ...(args.resume === undefined ? {} : { resume: args.resume as CcSessionId }),
@@ -97,9 +100,12 @@ export async function openSession(
     throw noSuchSession(id)
   }
 
+  // The RESOLVED cwd, not `args.cwd`: a resume without one gets it from
+  // discovery inside `open()`, and the mirror header must record what the
+  // session actually runs in, not what the caller omitted.
   let mirrored = false
   try {
-    mirrored = attachSessionMirror(ctx, id, args.cwd)
+    mirrored = attachSessionMirror(ctx, id, snapshot.cwd)
   } catch (error) {
     // A mirror that cannot be attached is a composition bug, not a reason to
     // strand a live subprocess holding a permission callback.
@@ -198,6 +204,28 @@ function attachSessionMirror(ctx: Context, id: CcSessionId, cwd: string): boolea
   const dshSession = store.get(id) ?? store.create(id, { meta: { cwd } })
   ctx.claudeCode.attachMirror(id, dshSession)
   return true
+}
+
+/**
+ * Describe WHERE a `claude_code_open` call is rooted, for PRESENTATION only —
+ * the tool-call title and the background job label, never parsed by anything.
+ *
+ * `cwd` is the common case and its wording is unchanged from before `cwd`
+ * became optional. A cwd-less resume (Task 11: the seam fills it in from
+ * discovery) has no directory to show at THIS layer — the caller specified a
+ * SESSION, not a path — so this names that instead of leaving the caller-typed
+ * `undefined` in the label, which making `cwd` optional made reachable.
+ * @param args - the `cwd`/`resume` fields of the open call.
+ * @returns a phrase like `in /repo` or `resuming <id>`, for interpolation into
+ *   a title that already says "Open Claude Code session".
+ */
+export function describeOpenTarget(args: Pick<CcOpenArgs, 'cwd' | 'resume'>): string {
+  if (args.cwd !== undefined) return `in ${args.cwd}`
+  if (args.resume !== undefined) return `resuming ${args.resume}`
+  // Neither given: the seam itself refuses this with INVALID_CWD before
+  // anything spawns. Presentation must still render something truthful for
+  // the instant before that refusal is seen.
+  return 'with no cwd or resume given'
 }
 
 /**

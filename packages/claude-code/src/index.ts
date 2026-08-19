@@ -74,13 +74,19 @@ export {
   Config,
   DEFAULT_API_KEY_REF,
   DEFAULT_DELEGATED_ASK_TIMEOUT_MS,
+  DEFAULT_DISCOVERY_CACHE_TTL_MS,
+  DEFAULT_DISCOVERY_SOURCE_TIMEOUT_MS,
+  DEFAULT_DISCOVERY_WINDOW_MS,
   DEFAULT_MAX_CONCURRENT_SESSIONS,
+  DEFAULT_MAX_RESUMABLE,
+  defaultHostLabel,
   resolveClaudeCodeConfig,
 } from './config.ts'
 export type {
   CcAskConfig,
   CcAskRuleConfig,
   CcDefaultsConfig,
+  CcDiscoveryConfig,
   CcLimitsConfig,
   ClaudeCodeConfig,
   ResolvedClaudeCodeConfig,
@@ -96,6 +102,17 @@ export {
   selectReapable,
   sessionLimitError,
 } from './inventory.ts'
+
+export {
+  groupByOrigin,
+  mergeDiscovered,
+  normalizeSourceClock,
+  ORIGIN_PRECEDENCE,
+  projectComposed,
+} from './discovery.ts'
+
+export { createLocalSource } from './discovery-local.ts'
+export type { CcLocalSourceDeps, CcRegistryEntry, CcStoreEntry } from './discovery-local.ts'
 
 export { createInputStream } from './input-stream.ts'
 export type { CcInputStream, CcUserMessageInit } from './input-stream.ts'
@@ -144,7 +161,9 @@ export {
   ASK_FALLBACKS,
   CC_AUTH_MODES,
   CC_CLOSE_REASONS,
+  CC_DISCOVERY_SCOPES,
   CC_PERMISSION_MODES,
+  CC_SESSION_ORIGINS,
   CC_SESSION_STATUSES,
   CC_SETTING_SOURCES,
   ClaudeCodeError,
@@ -157,6 +176,12 @@ export type {
   CcAuthMode,
   CcCloseReason,
   CcContextUsage,
+  CcDiscoverOptions,
+  CcDiscoverRequest,
+  CcDiscoveredSession,
+  CcDiscoveryResult,
+  CcDiscoveryScope,
+  CcDiscoverySource,
   CcErrorCode,
   CcErrorData,
   CcListOptions,
@@ -167,6 +192,7 @@ export type {
   CcSessionId,
   CcSessionInventoryEntry,
   CcSessionLimitInfo,
+  CcSessionOrigin,
   CcSessionSnapshot,
   CcSessionStatus,
   CcSettingSource,

@@ -112,7 +112,10 @@ export async function createClaudeCodeAgent(
       throw new ClaudeCodeError(
         `claude-code-agent: the seam opened session ${id} but does not track it`, 'UNKNOWN_SESSION')
     }
-    const session = sessions.prepare(id, { meta: { cwd: options.cwd } })
+    // The RESOLVED cwd, not `options.cwd`: a resume without one gets it from
+    // discovery inside `claudeCode.open()`, and the session header must record
+    // what the session actually runs in, not what the caller omitted.
+    const session = sessions.prepare(id, { meta: { cwd: snapshot.cwd } })
     const agent = new ClaudeCodeAgent({
       ctx,
       session,

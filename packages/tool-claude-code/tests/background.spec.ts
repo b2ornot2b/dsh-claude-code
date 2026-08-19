@@ -193,6 +193,16 @@ describe('the job spec', () => {
     expect(label).toHaveLength(MAX_JOB_LABEL_LENGTH)
     expect(label.endsWith('…')).toBe(true)
   })
+
+  it('names the resumed session instead of "undefined" when a cwd-less resume opens idle', () => {
+    // `cwd` became optional (Task 11: a resume fills it in from discovery),
+    // which made this label reachable with nothing to interpolate. It must
+    // name what the caller actually gave — the session id — not the missing
+    // directory.
+    const label = jobLabel({ resume: 'aaaaaaaa-0000-4000-8000-000000000000' })
+    expect(label).toBe('claude code session resuming aaaaaaaa-0000-4000-8000-000000000000')
+    expect(label).not.toContain('undefined')
+  })
 })
 
 describe('the JobHooks contract', () => {

@@ -129,6 +129,74 @@ describe('ClaudeCodeService.open()', () => {
   })
 })
 
+describe('open() and discovery', () => {
+  it('never consults a discovery source for a plain open with an explicit cwd', async () => {
+    // Correct today only because `options.cwd ?? await this.resumeCwd(...)`
+    // short-circuits on the `??` — a regression that called `discover()`
+    // before that check would pass every OTHER existing test here (they all
+    // assert on the result, not on whether discovery ran) while making every
+    // ordinary open fan out over SSH to every registered mesh source.
+    const { service, dispose } = await mount()
+    try {
+      let calls = 0
+      service.registerDiscoverySource({
+        id: 'remote:test',
+        host: 'b2studio',
+        discover: async request => {
+          calls += 1
+          return Promise.resolve({ generatedAt: request.now, cached: false, warnings: [], sessions: [] })
+        },
+      })
+
+      await service.open({ cwd: CWD })
+
+      expect(calls).toBe(0)
+    } finally {
+      await dispose()
+    }
+  })
+
+  it('does consult discovery for a resume that has to resolve its own cwd', async () => {
+    // The counter proven live, not trivially zero: the SAME source that saw
+    // zero calls for a plain open above must see at least one for a resume
+    // that has no cwd to fall back on.
+    const { service, dispose } = await mount()
+    try {
+      let calls = 0
+      const id = 'bbbbbbbb-0000-4000-8000-000000000000' as CcSessionId
+      service.registerDiscoverySource({
+        id: 'remote:test',
+        host: 'b2studio',
+        discover: async (request) => {
+          calls += 1
+          return Promise.resolve({
+            generatedAt: request.now,
+            cached: false,
+            warnings: [],
+            sessions: [{
+              sessionId: id,
+              origin: 'resumable' as const,
+              host: 'b2studio',
+              sourceId: 'remote:test',
+              cwd: CWD,
+              lastActivityAt: request.now - 1_000,
+              sendable: false,
+              resumable: true,
+              fidelity: 'probe' as const,
+            }],
+          })
+        },
+      })
+
+      await service.open({ resume: id, fork: true })
+
+      expect(calls).toBeGreaterThan(0)
+    } finally {
+      await dispose()
+    }
+  })
+})
+
 describe('ClaudeCodeService registry lifecycle', () => {
   it('close(id) closes the subprocess and drops the entry', async () => {
     const { service, fake, dispose } = await mount()
@@ -393,6 +461,114 @@ describe('ClaudeCodeService warm pool integration', () => {
       const forked = await service.open({ cwd: CWD, resume: first.id, fork: true })
       expect(forked.id).not.toBe(first.id)
       expect(service.list()).toHaveLength(2)
+    } finally {
+      await dispose()
+    }
+  })
+})
+
+describe('resume without an explicit cwd', () => {
+  it('fills the cwd from discovery', async () => {
+    const { service, fake, dispose } = await mount()
+    try {
+      const id = '77777777-7777-4777-8777-777777777777' as CcSessionId
+      service.registerDiscoverySource({
+        id: 'remote:test',
+        host: 'b2studio',
+        discover: async request => Promise.resolve({
+          generatedAt: request.now,
+          cached: false,
+          warnings: [],
+          sessions: [{
+            sessionId: id,
+            origin: 'resumable' as const,
+            host: 'b2studio',
+            sourceId: 'remote:test',
+            cwd: '/Users/b2/Developer/mine/b2infra',
+            lastActivityAt: request.now - 1_000,
+            sendable: false,
+            resumable: true,
+            fidelity: 'probe' as const,
+          }],
+        }),
+      })
+
+      await service.open({ resume: id, fork: true })
+
+      expect(fake.queries[0]?.options.cwd).toBe('/Users/b2/Developer/mine/b2infra')
+    } finally {
+      await dispose()
+    }
+  })
+
+  it('refuses with INVALID_CWD when discovery cannot name the session', async () => {
+    const { service, dispose } = await mount()
+    try {
+      await expect(service.open({
+        resume: '88888888-8888-4888-8888-888888888888' as CcSessionId, fork: true,
+      })).rejects.toMatchObject({ code: 'INVALID_CWD' })
+    } finally {
+      await dispose()
+    }
+  })
+})
+
+describe('resuming a session that is live elsewhere', () => {
+  /**
+   * Register a source reporting one live external session.
+   * @param service - the service under test.
+   * @param id - the session id to report.
+   */
+  function reportLive(service: ClaudeCodeService, id: CcSessionId): void {
+    service.registerDiscoverySource({
+      id: 'remote:b2umini',
+      host: 'b2umini',
+      discover: async request => Promise.resolve({
+        generatedAt: request.now,
+        cached: false,
+        warnings: [],
+        sessions: [{
+          sessionId: id,
+          origin: 'live-external' as const,
+          host: 'b2umini',
+          sourceId: 'remote:b2umini',
+          cwd: '/Users/b2/Developer/mine/grigios',
+          lastActivityAt: request.now - 1_000,
+          sendable: false,
+          resumable: true,
+          fidelity: 'probe' as const,
+          live: { liveness: 'confirmed' as const, pid: 3796 },
+        }],
+      }),
+    })
+  }
+
+  it('refuses a plain resume and names the host holding it', async () => {
+    const { service, dispose } = await mount()
+    try {
+      const id = '99999999-9999-4999-8999-999999999999' as CcSessionId
+      reportLive(service, id)
+
+      const failure = await service.open({ resume: id }).catch((error: unknown) => error)
+
+      expect(failure).toMatchObject({ code: 'SESSION_LIVE_ELSEWHERE' })
+      expect(String(failure)).toContain('b2umini')
+      expect(String(failure)).toContain('fork')
+    } finally {
+      await dispose()
+    }
+  })
+
+  it('allows the same resume as a fork', async () => {
+    const { service, fake, dispose } = await mount()
+    try {
+      const id = 'aaaaaaa1-aaaa-4aaa-8aaa-aaaaaaaaaaaa' as CcSessionId
+      reportLive(service, id)
+
+      const snapshot = await service.open({ resume: id, fork: true })
+
+      expect(snapshot.id).not.toBe(id) // a fork gets a fresh id
+      expect(fake.queries[0]?.options.forkSession).toBe(true)
     } finally {
       await dispose()
     }

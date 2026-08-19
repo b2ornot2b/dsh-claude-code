@@ -217,7 +217,11 @@ export async function mountTools(options: MountOptions = {}): Promise<ToolHarnes
   function claudeCodeToolMount(inner: Context): void {
     // `prewarm: false`: a warm subprocess would hand the next open a query that
     // never lands in `fake.queries`, making the specs' indexing racy for no gain.
-    void new ClaudeCodeService(inner, { prewarm: false }, { backend, drainPollMs: 1 })
+    // `wireLocalSource: false`: without it, the real local discovery source
+    // would read this machine's actual `~/.claude` on every mount — these
+    // specs must touch no real state, and must not depend on what happens to
+    // be on the machine running them.
+    void new ClaudeCodeService(inner, { prewarm: false }, { backend, drainPollMs: 1, wireLocalSource: false })
   }
   fibers.push(await ctx.plugin(claudeCodeToolMount))
   fibers.push(await ctx.plugin(ToolClaudeCode))
