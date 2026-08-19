@@ -343,6 +343,132 @@ describe('ClaudeCodeService.discover', () => {
     expect(withResumable.sessions).toHaveLength(1)
   })
 
+  it('surfaces a RESOLVING source\'s own warnings, not just a thrown one\'s', async () => {
+    // The bug this test exists to catch: a source never throws — it reports
+    // failure by resolving with `{ sessions: [], warnings: [...] }`. The old
+    // code kept only `result.sessions` and threw `result.warnings` away,
+    // recording a warning only when a source REJECTED — the one path a
+    // well-behaved source never takes. Against the unfixed code this
+    // assertion fails with `result.warnings` empty.
+    const { service } = mount()
+    service.registerDiscoverySource({
+      id: 'mesh:b2mini',
+      host: 'b2mini',
+      discover: async request => Promise.resolve({
+        generatedAt: request.now,
+        cached: false,
+        warnings: ['b2mini: Command failed: ssh b2mini.local true (exit 255)'],
+        sessions: [],
+      }),
+    })
+
+    const result = await service.discover({ scope: 'mesh' })
+
+    expect(result.warnings).toContain('b2mini: Command failed: ssh b2mini.local true (exit 255)')
+    expect(result.sessions).toHaveLength(0)
+  })
+
+  it('mixes a healthy source, a warning-but-no-sessions source, and a rejecting source in one call', async () => {
+    const { service } = mount()
+    const healthy = countingSource('mesh:b2umini', 'b2umini')
+    service.registerDiscoverySource(healthy.source)
+    service.registerDiscoverySource({
+      id: 'mesh:b2mini',
+      host: 'b2mini',
+      discover: async request => Promise.resolve({
+        generatedAt: request.now,
+        cached: false,
+        warnings: ['b2mini: never received the probe file'],
+        sessions: [],
+      }),
+    })
+    service.registerDiscoverySource({
+      id: 'mesh:b2hx',
+      host: 'b2hx',
+      discover: async () => Promise.reject(new Error('powered off')),
+    })
+
+    const result = await service.discover({ scope: 'mesh' })
+
+    expect(result.warnings).toHaveLength(2)
+    expect(result.warnings).toContain('b2mini: never received the probe file')
+    expect(result.warnings.some(warning => warning.includes('b2hx') && warning.includes('powered off')))
+      .toBe(true)
+    // The healthy source's sessions still come back — one degraded source
+    // (thrown or resolved) must not cost the others their results.
+    expect(result.sessions).toHaveLength(1)
+    expect(result.sessions[0]?.host).toBe('b2umini')
+  })
+
+  it('orders the aggregate warnings by source registration order, not by settle order', async () => {
+    // Deliberately settle OUT of registration order (b2hx first, b2umini
+    // last) so this test would fail against a shared-array-push
+    // implementation, where the aggregate order follows completion order
+    // instead of `sources` iteration order.
+    const { service } = mount()
+    const delay = async (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
+    service.registerDiscoverySource({
+      id: 'mesh:b2umini',
+      host: 'b2umini',
+      discover: async (request) => {
+        await delay(30)
+        return {
+          generatedAt: request.now, cached: false, warnings: ['b2umini: slow to answer'], sessions: [],
+        }
+      },
+    })
+    service.registerDiscoverySource({
+      id: 'mesh:b2mini',
+      host: 'b2mini',
+      discover: async (request) => {
+        await delay(15)
+        return {
+          generatedAt: request.now, cached: false, warnings: ['b2mini: slower to answer'], sessions: [],
+        }
+      },
+    })
+    service.registerDiscoverySource({
+      id: 'mesh:b2hx',
+      host: 'b2hx',
+      discover: async (request) => {
+        await delay(0)
+        return { generatedAt: request.now, cached: false, warnings: ['b2hx: fastest to answer'], sessions: [] }
+      },
+    })
+
+    const result = await service.discover({ scope: 'mesh' })
+
+    // Registration order above: b2umini, b2mini, b2hx — the OPPOSITE of
+    // settle order (b2hx settles first, b2umini last).
+    expect(result.warnings).toEqual([
+      'b2umini: slow to answer',
+      'b2mini: slower to answer',
+      'b2hx: fastest to answer',
+    ])
+  })
+
+  it('a cache hit replays the warnings from the call that populated it', async () => {
+    const { service } = mount({ discovery: { cacheTtlMs: 60_000 } })
+    service.registerDiscoverySource({
+      id: 'mesh:b2mini',
+      host: 'b2mini',
+      discover: async request => Promise.resolve({
+        generatedAt: request.now,
+        cached: false,
+        warnings: ['b2mini: Command failed: ssh …'],
+        sessions: [],
+      }),
+    })
+
+    const first = await service.discover({ scope: 'mesh' })
+    expect(first.cached).toBe(false)
+    expect(first.warnings).toEqual(['b2mini: Command failed: ssh …'])
+
+    const second = await service.discover({ scope: 'mesh' })
+    expect(second.cached).toBe(true)
+    expect(second.warnings).toEqual(['b2mini: Command failed: ssh …'])
+  })
+
   it('registering a new source invalidates the cache, even for an already-cached request shape', async () => {
     const { service } = mount({ discovery: { cacheTtlMs: 60_000 } })
     const first = countingSource('mesh:b2umini', 'b2umini')
