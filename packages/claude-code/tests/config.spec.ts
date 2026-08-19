@@ -1,7 +1,7 @@
 import {
   ClaudeCodeError, DEFAULT_API_KEY_REF, DEFAULT_DELEGATED_ASK_TIMEOUT_MS, DEFAULT_DISCOVERY_CACHE_TTL_MS,
-  DEFAULT_DISCOVERY_WINDOW_MS, DEFAULT_MAX_CONCURRENT_SESSIONS, DEFAULT_MAX_RESUMABLE, defaultHostLabel,
-  resolveClaudeCodeConfig,
+  DEFAULT_DISCOVERY_SOURCE_TIMEOUT_MS, DEFAULT_DISCOVERY_WINDOW_MS, DEFAULT_MAX_CONCURRENT_SESSIONS,
+  DEFAULT_MAX_RESUMABLE, defaultHostLabel, resolveClaudeCodeConfig,
 } from '@deepseek-ai/dsh-claude-code'
 import type { ClaudeCodeConfig } from '@deepseek-ai/dsh-claude-code'
 import { describe, expect, it } from 'vitest'
@@ -38,6 +38,7 @@ describe('resolveClaudeCodeConfig defaults', () => {
         recentWindowMs: DEFAULT_DISCOVERY_WINDOW_MS,
         maxResumable: DEFAULT_MAX_RESUMABLE,
         includeTitles: true,
+        sourceTimeoutMs: DEFAULT_DISCOVERY_SOURCE_TIMEOUT_MS,
       },
     })
   })
@@ -186,6 +187,7 @@ describe('discovery configuration', () => {
       recentWindowMs: 604_800_000,
       maxResumable: 50,
       includeTitles: true,
+      sourceTimeoutMs: DEFAULT_DISCOVERY_SOURCE_TIMEOUT_MS,
     })
     // hostLabel defaults to this host's short name, never an empty string.
     expect(resolved.hostLabel.length).toBeGreaterThan(0)
@@ -195,7 +197,7 @@ describe('discovery configuration', () => {
   it('accepts overrides', () => {
     const resolved = resolveClaudeCodeConfig({
       hostLabel: 'b2studio',
-      discovery: { local: false, cacheTtlMs: 1, includeTitles: false },
+      discovery: { local: false, cacheTtlMs: 1, includeTitles: false, sourceTimeoutMs: 5_000 },
     })
 
     expect(resolved.hostLabel).toBe('b2studio')
@@ -203,5 +205,6 @@ describe('discovery configuration', () => {
     expect(resolved.discovery.cacheTtlMs).toBe(1)
     expect(resolved.discovery.includeTitles).toBe(false)
     expect(resolved.discovery.maxResumable).toBe(50)
+    expect(resolved.discovery.sourceTimeoutMs).toBe(5_000)
   })
 })

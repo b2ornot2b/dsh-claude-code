@@ -553,17 +553,21 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
 
     const sources = [...this.discoverySources.values()]
       .filter(source => scope === 'mesh' || source.host === this.config.hostLabel)
-    const request: CcDiscoverRequest = {
+    const request: Omit<CcDiscoverRequest, 'signal'> = {
       now,
       includeResumable: options.includeResumable ?? true,
       recentWindowMs: this.config.discovery.recentWindowMs,
       maxResumable: this.config.discovery.maxResumable,
       includeTitles: this.config.discovery.includeTitles,
     }
+    const sourceTimeoutMs = this.config.discovery.sourceTimeoutMs
     const warnings: string[] = []
+    // One deadline PER SOURCE, inside this parallel map — never around the
+    // whole `Promise.all` — so one hung host cannot delay the others' results.
     const groups = await Promise.all(sources.map(async (source): Promise<CcDiscoveredSession[]> => {
       try {
-        return normalizeSourceClock(await source.discover(request), now)
+        const result = await this.queryWithDeadline(source, request, sourceTimeoutMs)
+        return normalizeSourceClock(result, now)
       } catch (error) {
         warnings.push(`${source.host}: ${error instanceof Error ? error.message : String(error)}`)
         return []
@@ -599,8 +603,58 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
     this.discoverySources.set(source.id, source)
     this.discoveryCache = undefined
     return () => {
-      this.discoverySources.delete(source.id)
-      this.discoveryCache = undefined
+      // Only remove THIS registration, identified by object, not by id: a
+      // second `registerDiscoverySource` call with the same id replaces the
+      // map entry, and the FIRST call's disposer must not be able to evict
+      // the second registration out from under it.
+      if (this.discoverySources.get(source.id) === source) {
+        this.discoverySources.delete(source.id)
+        this.discoveryCache = undefined
+      }
+    }
+  }
+
+  /**
+   * Query one source, bounded by `sourceTimeoutMs`.
+   *
+   * A rejection is already handled by the caller's `try`/`catch` — this exists
+   * for the failure mode a rejection does NOT cover: a source that never
+   * settles at all (a wedged child process, a stuck SSH connect with no
+   * transport timeout of its own). The source gets an `AbortController` so a
+   * well-behaved implementation can react and fail fast; the race against the
+   * deadline timer is what bounds it even if the source ignores the signal.
+   *
+   * @param source - the source to query.
+   * @param request - the shared request fields (`now`, window, limits); the
+   *   per-source `signal` is attached here, not by the caller.
+   * @param timeoutMs - how long to wait before giving up on this source.
+   * @returns the source's result.
+   * @throws whatever the source rejects with, or a timeout error naming the
+   *   elapsed limit once `timeoutMs` passes with nothing settled.
+   */
+  private async queryWithDeadline(
+    source: CcDiscoverySource,
+    request: Omit<CcDiscoverRequest, 'signal'>,
+    timeoutMs: number,
+  ): Promise<CcDiscoveryResult> {
+    const controller = new AbortController()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        controller.abort()
+        reject(new Error(`discovery timed out after ${timeoutMs}ms`))
+      }, timeoutMs)
+      // A pending per-source deadline must never be the reason a process
+      // refuses to exit — same posture as the idle-sweep timer above.
+      timer.unref?.()
+    })
+    try {
+      return await Promise.race([
+        source.discover({ ...request, signal: controller.signal }),
+        deadline,
+      ])
+    } finally {
+      if (timer !== undefined) clearTimeout(timer)
     }
   }
 

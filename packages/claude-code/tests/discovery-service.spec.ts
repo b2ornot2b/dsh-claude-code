@@ -1,3 +1,5 @@
+import { tmpdir } from 'node:os'
+
 import { Context } from '@deepseek-ai/cordis'
 import { describe, expect, it } from 'vitest'
 
@@ -8,11 +10,16 @@ import { createFakeBackend } from './fake-backend.ts'
 /**
  * The discovery coordinator.
  *
- * Three properties: the default scope stays free (it must not touch a source,
- * so today's callers pay nothing), a failing or slow source degrades to a
- * warning instead of an exception (a sleeping laptop must not break the list —
- * design P6), and results are cached for the configured TTL.
+ * Four properties: the default scope stays free (it must not touch a source,
+ * so today's callers pay nothing), a rejecting OR a hanging source degrades to
+ * a warning instead of blocking `discover()` forever (a sleeping laptop must
+ * not break the list — design P6), results are cached for the configured TTL
+ * with the composed group deduped on every read (cached or not), and scope
+ * filtering only ever widens what is consulted, never what is returned.
  */
+
+/** An absolute directory that certainly exists — `open()` validates `cwd` before anything spawns. */
+const CWD = tmpdir()
 
 /**
  * Mount a service with a fake backend and no real local source.
@@ -133,5 +140,122 @@ describe('ClaudeCodeService.discover', () => {
 
     expect(counting.calls()).toBe(1)
     expect(after.sessions).toEqual([])
+  })
+
+  it('bounds a source that never settles at all, instead of hanging forever', async () => {
+    // A rejection is already covered above. This is the failure mode that
+    // does NOT cover: a source whose promise never resolves NOR rejects — a
+    // stuck SSH connect, a wedged child process. `sourceTimeoutMs` is set
+    // small (not the real 30s default) so this test proves the bound without
+    // actually waiting anywhere near that long.
+    const { service } = mount({ discovery: { sourceTimeoutMs: 20 } })
+    service.registerDiscoverySource({
+      id: 'mesh:b2hx',
+      host: 'b2hx',
+      discover: async () => new Promise(() => {}), // deliberately never settles
+    })
+    const healthy = countingSource('mesh:b2umini', 'b2umini')
+    service.registerDiscoverySource(healthy.source)
+
+    const startedAt = Date.now()
+    const result = await service.discover({ scope: 'mesh' })
+    const elapsedMs = Date.now() - startedAt
+
+    // Generous relative to the 20ms deadline, but nowhere near "it hung":
+    // proves the coordinator returned instead of waiting out a real 30s+ hang.
+    expect(elapsedMs).toBeLessThan(2_000)
+    expect(result.warnings.join('\n')).toContain('b2hx')
+    expect(result.warnings.join('\n')).toContain('20ms')
+    // The other, healthy source still answered — one hung host must not
+    // delay (or drop) anyone else's results.
+    expect(result.sessions).toHaveLength(1)
+    expect(healthy.calls()).toBe(1)
+  })
+
+  it('a stale disposer never removes a same-id registration that replaced it', async () => {
+    const first = countingSource('mesh:b2umini', 'b2umini')
+    const { service } = mount()
+    const disposeFirst = service.registerDiscoverySource(first.source)
+
+    // Same id, a second registration — the documented "duplicate id replaces
+    // its predecessor" behavior.
+    const second = countingSource('mesh:b2umini', 'b2umini')
+    service.registerDiscoverySource(second.source)
+
+    // The FIRST registration's disposer, called after it was already
+    // replaced. It must be a no-op: it does not know about — and must not
+    // evict — the second registration now sitting at that id.
+    disposeFirst()
+
+    const result = await service.discover({ scope: 'mesh' })
+
+    expect(first.calls()).toBe(0)
+    expect(second.calls()).toBe(1)
+    expect(result.sessions).toHaveLength(1)
+  })
+
+  it('dedupes a session that is both composed and externally reported, even on a cache hit', async () => {
+    const { service } = mount({ discovery: { cacheTtlMs: 60_000 } })
+    const opened = await service.open({ cwd: CWD })
+
+    // A mesh source reports the SAME session id this composition already
+    // opened — the real-world case: a session opened here also has an
+    // on-disk registry file and transcript another source can see.
+    const source: CcDiscoverySource = {
+      id: 'mesh:b2umini',
+      host: 'b2umini',
+      discover: async request => Promise.resolve({
+        generatedAt: request.now,
+        cached: false,
+        warnings: [],
+        sessions: [{
+          sessionId: opened.id,
+          origin: 'live-external' as const,
+          host: 'b2umini',
+          sourceId: 'mesh:b2umini',
+          cwd: opened.cwd,
+          lastActivityAt: request.now - 1_000,
+          sendable: false,
+          resumable: true,
+          fidelity: 'probe' as const,
+          live: { liveness: 'assumed' as const },
+        }],
+      }),
+    }
+    service.registerDiscoverySource(source)
+
+    const first = await service.discover({ scope: 'mesh' })
+    const firstMatches = first.sessions.filter(session => session.sessionId === opened.id)
+    expect(firstMatches).toHaveLength(1)
+    expect(firstMatches[0]?.origin).toBe('composed')
+
+    // Second call inside the TTL: a cache hit. Amendment 2's whole point —
+    // the id must still appear exactly once, as the composed (higher
+    // fidelity, sendable) copy, not twice.
+    const second = await service.discover({ scope: 'mesh' })
+    expect(second.cached).toBe(true)
+    const secondMatches = second.sessions.filter(session => session.sessionId === opened.id)
+    expect(secondMatches).toHaveLength(1)
+    expect(secondMatches[0]?.origin).toBe('composed')
+  })
+
+  it('scope host consults only same-host sources; scope mesh consults every host', async () => {
+    const { service } = mount()
+    const same = countingSource('local:b2studio', 'b2studio')
+    const other = countingSource('mesh:b2umini', 'b2umini')
+    service.registerDiscoverySource(same.source)
+    service.registerDiscoverySource(other.source)
+
+    // `refresh: true` on both calls: this test is about scope filtering, not
+    // caching (covered above), so it deliberately never relies on TTL timing.
+    const hostResult = await service.discover({ scope: 'host', refresh: true })
+    expect(same.calls()).toBe(1)
+    expect(other.calls()).toBe(0)
+    expect(hostResult.sessions.map(session => session.host)).toEqual(['b2studio'])
+
+    const meshResult = await service.discover({ scope: 'mesh', refresh: true })
+    expect(same.calls()).toBe(2)
+    expect(other.calls()).toBe(1)
+    expect(meshResult.sessions.map(session => session.host).sort()).toEqual(['b2studio', 'b2umini'])
   })
 })
