@@ -6,3 +6,6 @@ coverage/
 
 # Playwright MCP scratch output
 .playwright-mcp/
+
+# Per-machine Claude Code tool permissions — local to a checkout, never shared
+.claude/settings.local.json

@@ -13,9 +13,35 @@ deliberately does not replace it. And it is not a wrapper that re-implements Cla
 agent loop: the CLI keeps its own transcript, its own compaction and its own tools. What this
 repo builds is the **seam** between the two systems.
 
-> Developed out-of-tree against the published `@deepseek-ai/dsh-*@0.1.0-rc.7` packages.
-> All three packages are `private: true` and keep the `@deepseek-ai/dsh-*` name so that
-> upstreaming into the harness monorepo is a move, not a rename — we do not own that npm scope.
+**Status: complete and production-validated.** All eight phases are done. The integration was
+driven end to end through a real dsh web UI in a 13-step acceptance test with a human answering
+every prompt by hand, and it holds **654 offline tests** (39 files) plus **49 opt-in live tests**
+(33 files) against real Claude Code subprocesses.
+
+| Start here | |
+|---|---|
+| 🚀 **[`docs/QUICKSTART.md`](docs/QUICKSTART.md)** | zero to "my dsh agent just delegated a task to Claude Code" |
+| 🔧 **[`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md)** | every failure mode we actually hit, symptom first |
+
+**What you need:** Node.js **>= 20**, **pnpm**, and a working `claude` CLI login. Then
+`pnpm install && pnpm run build && node examples/delegation-demo/run.mjs` is the whole proof —
+see the [quickstart](docs/QUICKSTART.md) for the full path, including mounting into a real dsh
+profile.
+
+> **You bring your own Claude Code access.** A claude.ai subscription login (`claude auth login`)
+> or an Anthropic API key is required; this project provides, proxies and shares neither.
+>
+> **Distribution note.** Anthropic's Agent SDK terms say third-party developers may not offer
+> claude.ai login or subscription rate limits inside their own products without prior approval.
+> Running this on your own machine against your own subscription is ordinary use; shipping a
+> product that points other people's Max plans at it is the case that note is about. Configure
+> `auth: 'api-key'` (with `ctx.credentials`) if you redistribute something built on this.
+>
+> **Not published to npm.** All three packages are `private: true` and keep the
+> `@deepseek-ai/dsh-*` names purely so that upstreaming into the harness monorepo would be a
+> *move* rather than a rename — we do not own that npm scope. `npm install
+> @deepseek-ai/dsh-claude-code` will not work and is not meant to. Developed out-of-tree against
+> the published `@deepseek-ai/dsh-*@0.1.0-rc.7` packages.
 
 ---
 
@@ -26,7 +52,10 @@ repo builds is the **seam** between the two systems.
 | **Interactive sessions** | Open a session, send follow-ups, steer, interrupt, resume, fork. The session outlives the call that opened it. |
 | **Human-in-the-loop, wired to dsh** | Claude Code's `canUseTool` prompts become `ctx.approval.request()`; `AskUserQuestion` becomes `ctx.userQuestions.ask()`; `ExitPlanMode` becomes a plan review, using dsh's own plan-mode conventions. |
 | **A readable transcript** | Every session is mirrored into a real dsh `Session` log — turns, steps, streaming text and reasoning chunks, tool calls and results — sharing ONE id with the Claude Code session. |
-| **Model-facing delegation** | Six `claude_code_*` tools, so a dsh agent's model can delegate coding work to Claude Code and read the answer back. |
+| **Model-facing delegation** | Seven `claude_code_*` tools — `open` / `send` / `wait` / `status` / `list` / `cancel` / `close` — so a dsh agent's model can delegate coding work to Claude Code and read the answer back. |
+| **Pollable waits, not timeouts** | A turn that is unfinished because a human has not clicked approve is a *value*, not an error: `claude_code_wait` defaults to 60s and RESOLVES with `status: 'running'` plus `pending_ask_details` naming the tool and the exact sentence the person is reading. The rendered text tells the model to keep polling rather than cancel and re-open. |
+| **Human-decision receipts** | Settled asks come back as `human_decisions`, each tagged `decided_by: 'human'` or `'policy'` — so an agent can tell "a person rejected this" from "a timeout denied it", instead of inferring consent from whether a tool call happened. |
+| **Errors that explain themselves** | A `SESSION_LIMIT` refusal carries an inventory of every live session — cwd, status, age, idle time, what each is blocked on and which is the safe one to close — because the cap is service-wide and the slots may be held by sessions the caller never opened. `claude_code_list` exposes the same view on demand. |
 | **Background work as dsh jobs** | `claude_code_open({ background: true })` registers the session as a `ctx.jobs` job: `job_list` / `job_output` / `job_kill` all work on it. |
 | **CC-backed dsh agents** | Publish a Claude Code session as a `ctx.agents` entry, so a human can talk to it in the dsh UI like any other agent. |
 
@@ -49,7 +78,7 @@ graph TB
 
   subgraph repo["this repo"]
     seam["<b>@deepseek-ai/dsh-claude-code</b><br/>ctx.claudeCode — the seam<br/>definition + provider<br/><i>the only package that may<br/>import the Claude Agent SDK</i>"]
-    toolpkg["<b>@deepseek-ai/dsh-tool-claude-code</b><br/>consumer: six claude_code_* tools"]
+    toolpkg["<b>@deepseek-ai/dsh-tool-claude-code</b><br/>consumer: seven claude_code_* tools"]
     agentpkg["<b>@deepseek-ai/dsh-claude-code-agent</b><br/>consumer: the Agent adapter"]
   end
 
@@ -85,7 +114,12 @@ Two rules the diagram encodes, both load-bearing:
 | [`packages/tool-claude-code`](packages/tool-claude-code/README.md) | `claude_code_open` / `_send` / `_wait` / `_status` / `_list` / `_cancel` / `_close` | consumer |
 | [`packages/claude-code-agent`](packages/claude-code-agent/README.md) | `ctx.claudeCodeAgents` — CC-backed `ctx.agents` entries | consumer |
 
-## Quickstart — the delegation demo
+## Quickstart
+
+**[`docs/QUICKSTART.md`](docs/QUICKSTART.md) is the full path** — prerequisites, the demo, and
+mounting into a real dsh profile with `scripts/install-into-dsh-profile.sh`. The short version:
+
+### The delegation demo
 
 The acceptance artifact. A stand-in "DeepSeek agent" delegates a real coding task to Claude
 Code through `claude_code_open`, and the script prints the mirrored session's whole event
@@ -98,13 +132,14 @@ node examples/delegation-demo/run.mjs     # needs a logged-in `claude` CLI
 ```
 
 It boots [`examples/delegation-demo/cordis.yml`](examples/delegation-demo/cordis.yml) through
-the real cordis Loader — no test doubles, no mocked SDK — registers an auto-answerer that logs
-every permission it grants, runs the delegation, verifies the created file's exact content, and
-exits `0`. Pass `--cwd <dir>` to pick where Claude Code works; a temp directory is used
-otherwise and is deliberately left behind for inspection. See
-[its README](examples/delegation-demo/README.md).
+the real cordis Loader — no test doubles, no mocked SDK — runs the delegation under an
+auto-answerer that logs every permission it grants, verifies the created file's exact content,
+and exits `0`. See [its README](examples/delegation-demo/README.md) for the flags and the
+[quickstart](docs/QUICKSTART.md) for what to expect while it runs.
 
-Mounting it yourself is a `cordis.yml` row per package:
+### Mounting it yourself
+
+One `cordis.yml` row per package — the minimal shape:
 
 ```yaml
 - id: claude-code
@@ -122,6 +157,12 @@ Mounting it yourself is a `cordis.yml` row per package:
 `@deepseek-ai/dsh-jobs-local` **and** `@deepseek-ai/dsh-tool-jobs` are required for
 `background: true`; `dsh-user-approval` / `dsh-user-questions` are optional but a session
 without an ask target denies every tool call, fail-closed, by design.
+
+Mounting into a **dsh profile** is different — the rows must sit under `insert:`, and the
+profile's `cordis.patch.yml` may be a deployed artifact that reverts your edits. Use
+[`scripts/install-into-dsh-profile.sh`](scripts/install-into-dsh-profile.sh) with the rows in
+[`scripts/rows.snippet.yml`](scripts/rows.snippet.yml), and read
+[quickstart step 4](docs/QUICKSTART.md) first.
 
 ## Test matrix
 
@@ -142,10 +183,8 @@ The two planes never meet in one process: a second copy of a module singleton br
 service resolution, so the source-plane and built-plane suites are deliberately separate
 projects.
 
-Current totals: **502 offline tests** across 32 files (plus 30 live files collected and
-skipped), and **44 live tests** across 30 files. Both were last verified from a true clean
-state — `node_modules`, `lib/` and every `*.tsbuildinfo` removed, then
-`pnpm install --frozen-lockfile`.
+Current totals: **654 offline tests** across 39 files (plus 33 live files collected and
+skipped), and **49 live tests** across those 33 files.
 
 **Offline is the default and stays the default.** `pnpm test` spawns no subprocess and makes no
 network call; every live spec is `describe.skipIf(!LIVE)` and is collected-and-skipped instead.
@@ -213,14 +252,26 @@ integration is the interactive complement, not a replacement.
 
 | Document | What it is |
 |---|---|
+| [`docs/QUICKSTART.md`](docs/QUICKSTART.md) | **start here.** Prerequisites → build → the demo → mounting into a real dsh profile → your first delegation → answering prompts in the dsh UI |
+| [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) | every failure mode this integration actually hit: symptom, cause, fix |
 | [`docs/phase1-api-contract.md`](docs/phase1-api-contract.md) | **the source of truth.** The complete export surface, every phase's corrections and deviations, and the verification bar |
 | [`docs/spec-review-and-plan.md`](docs/spec-review-and-plan.md) | the spec review (SDK deltas S1–S14, dsh deltas D1–D16), the phase plan, the Phase 0 spike results, and §8 project completion status |
 | [`docs/dsh-claude-code-integration.md`](docs/dsh-claude-code-integration.md) | the original design spec this was built from |
 | `spikes/` | Phase 0 probe scripts and their logs — an independent npm project, not part of the build |
 
-## Licence & distribution note
+## Licence & distribution
 
-MIT. Using your own claude.ai subscription through this integration is ordinary personal use.
-**Third parties may not offer claude.ai login or subscription limits to their own users without
-Anthropic's approval** — if you redistribute a product built on this, configure API-key auth
-(`auth: 'api-key'` + `ctx.credentials`) rather than shipping subscription login.
+**Licence.** MIT — see `LICENSE` at the repository root; the workspace `package.json` declares
+the same.
+
+**Distribution note.** Anthropic's Agent SDK terms state that third-party developers may not
+offer claude.ai login or subscription rate limits inside their own products without prior
+approval. Using your own claude.ai subscription through this integration, on your own machine, is
+ordinary use. Publishing a product that points *other people's* Max plans at it is the case that
+note is about — if you redistribute something built on this, configure API-key auth
+(`auth: 'api-key'` + `ctx.credentials`) rather than shipping subscription login. See §9 of
+[`docs/dsh-claude-code-integration.md`](docs/dsh-claude-code-integration.md).
+
+**Not on npm.** All three packages are `private: true`. They keep the `@deepseek-ai/dsh-*` names
+only so that upstreaming would be a move rather than a rename — this project does not own that
+npm scope, and `npm install @deepseek-ai/dsh-claude-code` is not expected to work.

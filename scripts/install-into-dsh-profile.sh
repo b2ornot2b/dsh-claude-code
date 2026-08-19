@@ -64,8 +64,8 @@ mkdir -p "$NM/@anthropic-ai"
 ln -sfn "$SDK" "$NM/@anthropic-ai/claude-agent-sdk"
 
 # A profile patch may be a DEPLOYED ARTIFACT rather than a source of truth --
-# e.g. b2infra's dsh-deploy does `install etc/dsh/cordis.patch.yml -> the
-# profile`, so anything written here is silently reverted on the next deploy
+# a deploy-managed profile typically does `install <source>/cordis.patch.yml ->
+# the profile`, so anything written here is silently reverted on the next deploy
 # (and the daemon restarts believing it composed your rows). Detect that and
 # refuse to edit the copy: the rows belong in the upstream source.
 if head -5 "$PATCH" 2>/dev/null | grep -qiE "deployed to .*profiles"; then
@@ -76,7 +76,7 @@ if head -5 "$PATCH" 2>/dev/null | grep -qiE "deployed to .*profiles"; then
   echo
   sed -n "/$MARK_BEGIN/,/$MARK_END/p" "$REPO/scripts/rows.snippet.yml" 2>/dev/null || cat "$REPO/scripts/rows.snippet.yml"
   echo
-  echo "   then re-deploy (b2infra: sudo launchd/bin/dsh-deploy) and restart dsh."
+  echo "   then re-run your profile's deploy step and restart dsh."
   exit 2
 fi
 
@@ -109,5 +109,5 @@ YAML
 
 echo
 echo "installed into profile '$PROFILE'."
-echo "  restart dsh, then the agent should have claude_code_open/send/wait/status/cancel/close"
+echo "  restart dsh, then the agent should have claude_code_open/send/wait/status/list/cancel/close"
 echo "  rollback: scripts/install-into-dsh-profile.sh --uninstall $PROFILE"
