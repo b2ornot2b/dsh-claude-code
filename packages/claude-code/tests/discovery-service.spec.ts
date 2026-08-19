@@ -90,6 +90,10 @@ describe('ClaudeCodeService.discover', () => {
   })
 
   it('queries sources at mesh scope and caches for the TTL', async () => {
+    // The positive caching case round 2's keyed cache must not regress: the
+    // SAME request shape (scope + includeResumable) called twice inside the
+    // TTL consults the source once and reports `cached: true` the second
+    // time — proving the key doesn't just disable caching altogether.
     const { service } = mount({ discovery: { cacheTtlMs: 60_000 } })
     const counting = countingSource('mesh:b2umini', 'b2umini')
     service.registerDiscoverySource(counting.source)
@@ -246,16 +250,119 @@ describe('ClaudeCodeService.discover', () => {
     service.registerDiscoverySource(same.source)
     service.registerDiscoverySource(other.source)
 
-    // `refresh: true` on both calls: this test is about scope filtering, not
-    // caching (covered above), so it deliberately never relies on TTL timing.
-    const hostResult = await service.discover({ scope: 'host', refresh: true })
+    // No `refresh: true` here (round 2): now that the cache is keyed by
+    // `scope` + `includeResumable`, a `host` call followed by a `mesh` call
+    // are different cache entries by construction, so this test proves scope
+    // filtering AND incidentally exercises that the two scopes never collide
+    // in the cache — see the dedicated regression test below for that
+    // specifically.
+    const hostResult = await service.discover({ scope: 'host' })
     expect(same.calls()).toBe(1)
     expect(other.calls()).toBe(0)
     expect(hostResult.sessions.map(session => session.host)).toEqual(['b2studio'])
 
-    const meshResult = await service.discover({ scope: 'mesh', refresh: true })
+    const meshResult = await service.discover({ scope: 'mesh' })
     expect(same.calls()).toBe(2)
     expect(other.calls()).toBe(1)
     expect(meshResult.sessions.map(session => session.host).sort()).toEqual(['b2studio', 'b2umini'])
+  })
+
+  it('never serves a scope: "host" cache entry to a scope: "mesh" call (round 2 regression)', async () => {
+    // The bug: `discoveryCache` used to be a single slot shared across every
+    // scope. A `scope: 'host'` result could be served back as a cache hit to
+    // this SECOND, WIDER `scope: 'mesh'` call — reporting `cached: true` and
+    // never consulting the mesh-only source, while the caller believes it
+    // asked about (and got an answer for) the whole mesh. Both calls below
+    // land well inside the TTL and neither passes `refresh: true`: against
+    // the single-slot implementation this test fails (`meshResult.cached`
+    // would read `true` and `other.calls()` would stay `0`).
+    const { service } = mount({ discovery: { cacheTtlMs: 60_000 } })
+    const same = countingSource('local:b2studio', 'b2studio')
+    const other = countingSource('mesh:b2umini', 'b2umini')
+    service.registerDiscoverySource(same.source)
+    service.registerDiscoverySource(other.source)
+
+    const hostResult = await service.discover({ scope: 'host' })
+    expect(hostResult.cached).toBe(false)
+    expect(same.calls()).toBe(1)
+    expect(other.calls()).toBe(0)
+
+    const meshResult = await service.discover({ scope: 'mesh' })
+    expect(meshResult.cached).toBe(false)
+    expect(other.calls()).toBe(1)
+    expect(meshResult.sessions.map(session => session.host).sort()).toEqual(['b2studio', 'b2umini'])
+  })
+
+  it('never serves an includeResumable: false cache entry to an includeResumable: true call', async () => {
+    const { service } = mount({ discovery: { cacheTtlMs: 60_000 } })
+    let calls = 0
+    let lastIncludeResumable: boolean | undefined
+    const source: CcDiscoverySource = {
+      id: 'mesh:b2umini',
+      host: 'b2umini',
+      discover: async (request) => {
+        calls += 1
+        lastIncludeResumable = request.includeResumable
+        return Promise.resolve({
+          generatedAt: request.now,
+          cached: false,
+          warnings: [],
+          // The fixture only ever reports a session when resumables were
+          // actually asked for, so a suppressed-vs-included mixup is
+          // observable in the result, not just in the request the fixture saw.
+          sessions: request.includeResumable
+            ? [{
+                sessionId: 'aaaaaaaa-0000-4000-8000-000000000000' as CcSessionId,
+                origin: 'resumable' as const,
+                host: 'b2umini',
+                sourceId: 'mesh:b2umini',
+                cwd: '/tmp',
+                lastActivityAt: request.now - 1_000,
+                sendable: false,
+                resumable: true,
+                fidelity: 'probe' as const,
+              }]
+            : [],
+        })
+      },
+    }
+    service.registerDiscoverySource(source)
+
+    const suppressed = await service.discover({ scope: 'mesh', includeResumable: false })
+    expect(suppressed.cached).toBe(false)
+    expect(calls).toBe(1)
+    expect(lastIncludeResumable).toBe(false)
+    expect(suppressed.sessions).toHaveLength(0)
+
+    // Same TTL, same scope, DIFFERENT includeResumable — must not be served
+    // the suppressed result from the call above.
+    const withResumable = await service.discover({ scope: 'mesh', includeResumable: true })
+    expect(withResumable.cached).toBe(false)
+    expect(calls).toBe(2)
+    expect(lastIncludeResumable).toBe(true)
+    expect(withResumable.sessions).toHaveLength(1)
+  })
+
+  it('registering a new source invalidates the cache, even for an already-cached request shape', async () => {
+    const { service } = mount({ discovery: { cacheTtlMs: 60_000 } })
+    const first = countingSource('mesh:b2umini', 'b2umini')
+    service.registerDiscoverySource(first.source)
+
+    const cached = await service.discover({ scope: 'mesh' })
+    expect(cached.cached).toBe(false)
+    expect(first.calls()).toBe(1)
+
+    // A DIFFERENT id, so both sources stay registered — this is about the
+    // source SET changing, not a same-id replacement (covered elsewhere).
+    const second = countingSource('mesh:b2hx', 'b2hx')
+    service.registerDiscoverySource(second.source)
+
+    // Still well inside the TTL. If registration only invalidated whatever
+    // slot happened to be "current" (or nothing at all), this would read
+    // `cached: true` and the new source would never be consulted.
+    const afterRegister = await service.discover({ scope: 'mesh' })
+    expect(afterRegister.cached).toBe(false)
+    expect(second.calls()).toBe(1)
+    expect(afterRegister.sessions).toHaveLength(2)
   })
 })

@@ -35,8 +35,8 @@ import type { CcSessionDeps } from './session.ts'
 import { ClaudeCodeError, newCcSessionId } from './types.ts'
 import type {
   CcAccountInfo, CcCloseReason, CcContextUsage, CcDiscoveredSession, CcDiscoverOptions, CcDiscoverRequest,
-  CcDiscoveryResult, CcDiscoverySource, CcListOptions, CcLogger, CcOpenOptions, CcSessionId, CcSessionSnapshot,
-  CcSessionStatus, ClaudeCode,
+  CcDiscoveryResult, CcDiscoveryScope, CcDiscoverySource, CcListOptions, CcLogger, CcOpenOptions, CcSessionId,
+  CcSessionSnapshot, CcSessionStatus, ClaudeCode,
 } from './types.ts'
 
 declare module '@deepseek-ai/cordis' {
@@ -163,15 +163,24 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
   private readonly discoverySources = new Map<string, CcDiscoverySource>()
 
   /**
-   * The last merged wide-scope result, for `config.discovery.cacheTtlMs`.
+   * The last merged wide-scope result PER REQUEST SHAPE, for
+   * `config.discovery.cacheTtlMs`.
    *
-   * Holds ONLY the external (`live-external`/`resumable`) sessions, never the
-   * composed ones: composed sessions are re-projected fresh on every
-   * {@link ClaudeCodeService.discover} call regardless of cache state, because
-   * they are free (no source to query) and change fastest — a cached one could
-   * name a session that has since closed.
+   * Keyed by {@link discoveryCacheKey} — everything that changes what a
+   * source is actually asked for (`scope`, `includeResumable`). Without this,
+   * a `scope: 'host'` result could be served back as a cache hit to a
+   * subsequent `scope: 'mesh'` call inside the TTL: a caller asking about the
+   * whole mesh would silently get only this host's sessions, marked
+   * `cached: true` with no warning that the answer had been narrowed. The
+   * same hazard applies to `includeResumable`.
+   *
+   * Each entry holds ONLY the external (`live-external`/`resumable`) sessions,
+   * never the composed ones: composed sessions are re-projected fresh on
+   * every {@link ClaudeCodeService.discover} call regardless of cache state,
+   * because they are free (no source to query) and change fastest — a cached
+   * one could name a session that has since closed.
    */
-  private discoveryCache: { at: number, result: CcDiscoveryResult } | undefined
+  private readonly discoveryCache = new Map<string, { at: number, result: CcDiscoveryResult }>()
 
   /**
    * @param ctx - the context that owns the service; disposal closes every session.
@@ -537,7 +546,12 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
       return { sessions: composed, warnings: [], generatedAt: now, cached: false }
     }
 
-    const cached = this.discoveryCache
+    const includeResumable = options.includeResumable ?? true
+    // Everything that changes what a source is actually asked for goes in the
+    // key: a cache hit must only ever serve a result gathered under the SAME
+    // request shape (see the field doc on `discoveryCache`).
+    const cacheKey = discoveryCacheKey(scope, includeResumable)
+    const cached = this.discoveryCache.get(cacheKey)
     if (options.refresh !== true && cached !== undefined
       && now - cached.at < this.config.discovery.cacheTtlMs) {
       // Routed through the SAME merge the uncached path uses (Amendment 2):
@@ -555,7 +569,7 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
       .filter(source => scope === 'mesh' || source.host === this.config.hostLabel)
     const request: Omit<CcDiscoverRequest, 'signal'> = {
       now,
-      includeResumable: options.includeResumable ?? true,
+      includeResumable,
       recentWindowMs: this.config.discovery.recentWindowMs,
       maxResumable: this.config.discovery.maxResumable,
       includeTitles: this.config.discovery.includeTitles,
@@ -579,10 +593,10 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
     // projected `composed` on the next call is how a closed composed session
     // stops shadowing a cached external copy of itself.
     const external = mergeDiscovered([], groups, now)
-    this.discoveryCache = {
+    this.discoveryCache.set(cacheKey, {
       at: now,
       result: { sessions: external, warnings, generatedAt: now, cached: false },
-    }
+    })
     return {
       sessions: mergeDiscovered(composed, [external], now),
       warnings,
@@ -601,7 +615,10 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
    */
   registerDiscoverySource(source: CcDiscoverySource): () => void {
     this.discoverySources.set(source.id, source)
-    this.discoveryCache = undefined
+    // The source SET changed, which invalidates every cached request shape,
+    // not just the one currently in flight — a `mesh` entry cached before
+    // this source existed is just as stale as a `host` one.
+    this.discoveryCache.clear()
     return () => {
       // Only remove THIS registration, identified by object, not by id: a
       // second `registerDiscoverySource` call with the same id replaces the
@@ -609,7 +626,7 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
       // the second registration out from under it.
       if (this.discoverySources.get(source.id) === source) {
         this.discoverySources.delete(source.id)
-        this.discoveryCache = undefined
+        this.discoveryCache.clear()
       }
     }
   }
@@ -846,6 +863,29 @@ export const MAX_IDLE_SWEEP_MS = 60_000
  */
 export function sweepIntervalMs(idleTimeoutMs: number): number {
   return Math.min(MAX_IDLE_SWEEP_MS, Math.max(MIN_IDLE_SWEEP_MS, Math.floor(idleTimeoutMs / 4)))
+}
+
+/**
+ * The `discoveryCache` key for one request shape.
+ *
+ * MUST cover every parameter that changes what a source is actually asked
+ * for — today that is `scope` (which sources get consulted at all: `host`
+ * queries a strict subset of what `mesh` does) and `includeResumable` (which
+ * changes the request each consulted source receives). Leaving either one out
+ * of the key would let a narrower result silently answer a wider request: a
+ * `scope: 'host'` result served back as a `scope: 'mesh'` cache hit would
+ * report only this host's sessions as if the whole mesh had been asked, with
+ * `cached: true` and no warning that the answer had been narrowed — the exact
+ * bug this key exists to rule out. `recentWindowMs`/`maxResumable`/
+ * `includeTitles` are deliberately NOT here: they come from `config.discovery`
+ * and never vary between calls on one service instance, so they cannot make
+ * two calls ask for different things.
+ * @param scope - the requested discovery scope (`'host'` or `'mesh'`; `'composition'` never reaches the cache).
+ * @param includeResumable - whether resumable sessions were requested.
+ * @returns a stable string key for this request shape.
+ */
+function discoveryCacheKey(scope: CcDiscoveryScope, includeResumable: boolean): string {
+  return `${scope}:${includeResumable}`
 }
 
 /**
