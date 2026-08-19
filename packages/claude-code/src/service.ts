@@ -32,8 +32,8 @@ import { CcSession, resolveQueryOptions } from './session.ts'
 import type { CcSessionDeps } from './session.ts'
 import { ClaudeCodeError, newCcSessionId } from './types.ts'
 import type {
-  CcAccountInfo, CcCloseReason, CcContextUsage, CcListOptions, CcLogger, CcOpenOptions, CcSessionId,
-  CcSessionSnapshot, CcSessionStatus, ClaudeCode,
+  CcAccountInfo, CcCloseReason, CcContextUsage, CcDiscoverOptions, CcDiscoveryResult, CcDiscoverySource,
+  CcListOptions, CcLogger, CcOpenOptions, CcSessionId, CcSessionSnapshot, CcSessionStatus, ClaudeCode,
 } from './types.ts'
 
 declare module '@deepseek-ai/cordis' {
@@ -465,6 +465,35 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
         `claude-code: no session ${id} is registered in this context`, 'UNKNOWN_SESSION')
     }
     return actor.attachAskTarget(target)
+  }
+
+  /**
+   * Every session this composition can see, from every registered source.
+   *
+   * Stubbed here: session discovery (spec §3, §6.1, §6.4) lands as its own
+   * task — this declares the vocabulary the interface commits to, not the
+   * coordinator that merges sources, dedupes, and normalizes clocks.
+   * @param options - scope and cache control.
+   * @returns never — always throws.
+   * @throws {ClaudeCodeError} code `NOT_IMPLEMENTED`.
+   */
+  discover(options?: CcDiscoverOptions): Promise<CcDiscoveryResult> {
+    void options
+    throw new ClaudeCodeError('claude-code: discover() is not implemented yet', 'NOT_IMPLEMENTED')
+  }
+
+  /**
+   * Contribute sessions from outside this composition.
+   *
+   * Stubbed alongside {@link ClaudeCodeService.discover} for the same reason.
+   * @param source - the source to add.
+   * @returns never — always throws.
+   * @throws {ClaudeCodeError} code `NOT_IMPLEMENTED`.
+   */
+  registerDiscoverySource(source: CcDiscoverySource): () => void {
+    void source
+    throw new ClaudeCodeError(
+      'claude-code: registerDiscoverySource() is not implemented yet', 'NOT_IMPLEMENTED')
   }
 
   /**

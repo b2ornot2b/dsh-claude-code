@@ -367,6 +367,93 @@ export interface CcSessionInventoryEntry {
   readonly pendingAskDetails: readonly CcPendingAsk[]
 }
 
+/** Where a discovered session came from, and therefore what is true of it. */
+export type CcSessionOrigin = 'composed' | 'live-external' | 'resumable'
+
+/** Runtime list of {@link CcSessionOrigin}, for schema enums. */
+export const CC_SESSION_ORIGINS: readonly CcSessionOrigin[]
+  = ['composed', 'live-external', 'resumable']
+
+/** How wide a net {@link ClaudeCode.discover} casts. */
+export type CcDiscoveryScope = 'composition' | 'host' | 'mesh'
+
+/** Runtime list of {@link CcDiscoveryScope}, for schema enums. */
+export const CC_DISCOVERY_SCOPES: readonly CcDiscoveryScope[] = ['composition', 'host', 'mesh']
+
+/**
+ * One session as discovery reports it, from any origin.
+ *
+ * `sendable` and `resumable` are carried explicitly rather than re-derived from
+ * `origin` by every consumer: the rule belongs in one place, and a model that
+ * cannot tell "I may send to this" from "I may only fork it" will try to send.
+ */
+export interface CcDiscoveredSession {
+  readonly sessionId: CcSessionId
+  readonly origin: CcSessionOrigin
+  /** The host label that reported it; the local host names itself. */
+  readonly host: string
+  /** Which source reported it — for debugging a wrong answer. */
+  readonly sourceId: string
+  /** Working directory, translated to THIS host's paths where a map applies. */
+  readonly cwd: string
+  /** The untranslated path, present only when translation changed it. */
+  readonly remoteCwd?: string
+  readonly title?: string
+  readonly gitBranch?: string
+  /** Clock-normalized against the reporting source's own clock. */
+  readonly lastActivityAt: number
+  readonly createdAt?: number
+  /** True only for `composed` sessions: nothing else has a control channel. */
+  readonly sendable: boolean
+  readonly resumable: boolean
+  /** `sdk` metadata is authoritative; `probe` metadata is reconstructed. */
+  readonly fidelity: 'sdk' | 'probe'
+  readonly live?: {
+    readonly pid?: number
+    readonly kind?: string
+    readonly entrypoint?: string
+    readonly claudeVersion?: string
+    readonly liveness: 'confirmed' | 'assumed'
+  }
+  /** Present exactly when `origin === 'composed'`. */
+  readonly composed?: CcSessionSnapshot
+  readonly sizeBytes?: number
+}
+
+/** What a source or the coordinator returns. Partial results plus warnings. */
+export interface CcDiscoveryResult {
+  readonly sessions: readonly CcDiscoveredSession[]
+  /** Named degradations, e.g. `b2hx: unreachable (ssh connect timeout 6000ms)`. */
+  readonly warnings: readonly string[]
+  readonly generatedAt: number
+  readonly cached: boolean
+}
+
+/** What the coordinator asks a source for. */
+export interface CcDiscoverRequest {
+  readonly now: number
+  readonly includeResumable: boolean
+  readonly recentWindowMs: number
+  readonly maxResumable: number
+  readonly includeTitles: boolean
+  readonly signal?: AbortSignal
+}
+
+/** A contributor of sessions the composition did not open. */
+export interface CcDiscoverySource {
+  readonly id: string
+  readonly host: string
+  discover(request: CcDiscoverRequest): Promise<CcDiscoveryResult>
+}
+
+/** Caller-facing options for {@link ClaudeCode.discover}. */
+export interface CcDiscoverOptions {
+  readonly scope?: CcDiscoveryScope
+  readonly includeResumable?: boolean
+  /** Bypass the TTL cache. */
+  readonly refresh?: boolean
+}
+
 /**
  * The structured payload carried by a `SESSION_LIMIT` refusal: who is holding
  * the slots, and which one is safe to close.
@@ -480,6 +567,11 @@ export type CcErrorCode =
    * attach an ask target (or a call site) to.
    */
   | 'ASK_UNAVAILABLE'
+  /**
+   * A plain resume was refused because the target session is running
+   * elsewhere. Two writers on one transcript corrupts it; fork instead.
+   */
+  | 'SESSION_LIVE_ELSEWHERE'
 
 /** Error taxonomy for the Claude Code seam. */
 export class ClaudeCodeError extends HarnessError {
@@ -573,4 +665,17 @@ export interface ClaudeCode {
    * @throws {ClaudeCodeError} code `NOT_IMPLEMENTED` until Phase 2 owns a live query.
    */
   accountInfo(): Promise<CcAccountInfo>
+  /**
+   * Every session this composition can see, from every registered source.
+   * Never rejects: source failures come back as `warnings` (spec §10).
+   * @param options - scope and cache control.
+   * @returns the merged, deduped, clock-normalized inventory.
+   */
+  discover(options?: CcDiscoverOptions): Promise<CcDiscoveryResult>
+  /**
+   * Contribute sessions from outside this composition.
+   * @param source - the source to add.
+   * @returns a disposer that removes it.
+   */
+  registerDiscoverySource(source: CcDiscoverySource): () => void
 }
