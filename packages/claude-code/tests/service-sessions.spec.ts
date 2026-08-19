@@ -444,3 +444,65 @@ describe('resume without an explicit cwd', () => {
     }
   })
 })
+
+describe('resuming a session that is live elsewhere', () => {
+  /**
+   * Register a source reporting one live external session.
+   * @param service - the service under test.
+   * @param id - the session id to report.
+   */
+  function reportLive(service: ClaudeCodeService, id: CcSessionId): void {
+    service.registerDiscoverySource({
+      id: 'remote:b2umini',
+      host: 'b2umini',
+      discover: async request => Promise.resolve({
+        generatedAt: request.now,
+        cached: false,
+        warnings: [],
+        sessions: [{
+          sessionId: id,
+          origin: 'live-external' as const,
+          host: 'b2umini',
+          sourceId: 'remote:b2umini',
+          cwd: '/Users/b2/Developer/mine/grigios',
+          lastActivityAt: request.now - 1_000,
+          sendable: false,
+          resumable: true,
+          fidelity: 'probe' as const,
+          live: { liveness: 'confirmed' as const, pid: 3796 },
+        }],
+      }),
+    })
+  }
+
+  it('refuses a plain resume and names the host holding it', async () => {
+    const { service, dispose } = await mount()
+    try {
+      const id = '99999999-9999-4999-8999-999999999999' as CcSessionId
+      reportLive(service, id)
+
+      const failure = await service.open({ resume: id }).catch((error: unknown) => error)
+
+      expect(failure).toMatchObject({ code: 'SESSION_LIVE_ELSEWHERE' })
+      expect(String(failure)).toContain('b2umini')
+      expect(String(failure)).toContain('fork')
+    } finally {
+      await dispose()
+    }
+  })
+
+  it('allows the same resume as a fork', async () => {
+    const { service, fake, dispose } = await mount()
+    try {
+      const id = 'aaaaaaa1-aaaa-4aaa-8aaa-aaaaaaaaaaaa' as CcSessionId
+      reportLive(service, id)
+
+      const snapshot = await service.open({ resume: id, fork: true })
+
+      expect(snapshot.id).not.toBe(id) // a fork gets a fresh id
+      expect(fake.queries[0]?.options.forkSession).toBe(true)
+    } finally {
+      await dispose()
+    }
+  })
+})

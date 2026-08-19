@@ -261,8 +261,10 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
    *   `resume`, or when the given (or discovered) cwd is not an existing
    *   absolute directory (checked BEFORE anything spawns), `SESSION_LIMIT` when
    *   `limits.maxConcurrentSessions` is already reached, `SESSION_EXISTS` when a
-   *   plain resume targets a session that is still open here, or `BACKEND_ERROR`
-   *   when the SDK fails to start the session.
+   *   plain resume targets a session that is still open here,
+   *   `SESSION_LIVE_ELSEWHERE` when a plain resume targets a session discovery
+   *   reports running in another terminal or on another mesh host, or
+   *   `BACKEND_ERROR` when the SDK fails to start the session.
    */
   async open(options: CcOpenOptions): Promise<CcSessionSnapshot> {
     // A resumed session already has a working directory; making the caller
@@ -286,6 +288,26 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
         `claude-code: session ${options.resume} is already open in this context; send to it or close it `
         + 'before resuming (a plain resume continues under the SAME id)',
         'SESSION_EXISTS')
+    }
+
+    // SESSION_EXISTS only knows about sessions THIS composition opened. A
+    // session running in another terminal or on another host is invisible to
+    // it, and appending to a transcript another live process is writing
+    // corrupts it. Forking is always safe, so the refusal names that way out.
+    // Cached, same as `resumeCwd` above — a resume must not force a fresh
+    // probe of every mesh host on top of the one discovery already ran.
+    if (options.resume !== undefined && options.fork !== true) {
+      const elsewhere = (await this.discover({ scope: 'mesh' })).sessions
+        .find(session => session.sessionId === options.resume && session.origin === 'live-external')
+      if (elsewhere !== undefined) {
+        throw new ClaudeCodeError(
+          `claude-code: session ${options.resume} is running on ${elsewhere.host}`
+          + `${elsewhere.live?.pid === undefined ? '' : ` (pid ${elsewhere.live.pid})`}`
+          + `${elsewhere.title === undefined ? '' : ` — "${elsewhere.title}"`}. `
+          + 'Continuing it would put two processes writing one transcript. '
+          + 'Pass fork: true to branch from it instead; the original is left untouched.',
+          'SESSION_LIVE_ELSEWHERE')
+      }
     }
 
     // The pool template is deliberately resume-FREE. `warmFingerprint` excludes
