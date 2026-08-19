@@ -279,6 +279,21 @@ export const DISCOVERED_SESSION_ITEM_SCHEMA = {
  * Project one discovery group (live-external or resumable) onto the tool wire
  * shape.
  *
+ * `sendable` is ASSERTED here, not copied from `session.sendable`. This
+ * function is only ever called on the `liveExternal` and `resumable` groups
+ * — never `composed` — and neither origin can ever carry a control channel,
+ * by construction: nothing outside this composition holds one. `session`
+ * arrives here as parsed JSON from a discovery source (today the local disk
+ * scan, which happens to hardcode `false`; a mesh source in a later task is
+ * untrusted input from another machine over the network). If a source were
+ * ever to report `sendable: true` for one of these origins — a bug on that
+ * source's end, or a compromised one — copying the claim through would hand
+ * a model structured JSON telling it a session is sendable when nothing here
+ * can actually route a send to it, which is precisely the failure mode this
+ * tool exists to prevent. This is a trust boundary: what the source claims
+ * about itself is never authoritative for what this projection is allowed to
+ * assert.
+ *
  * @param sessions - the discovered sessions, already in the order the caller
  *   wants them rendered (`groupByOrigin` preserves the merge's recency order).
  * @param now - the clock reading `idle_ms` is measured against.
@@ -298,7 +313,7 @@ export function projectDiscovered(
     // projection ever sees it (`normalizeSourceClock`), but a defensive floor
     // here is cheap and a negative "idle" reads as a bug, not as data.
     idle_ms: Math.max(0, now - session.lastActivityAt),
-    sendable: session.sendable,
+    sendable: false,
     resumable: session.resumable,
     ...(session.live?.liveness === undefined ? {} : { liveness: session.live.liveness }),
     ...(session.live?.pid === undefined ? {} : { pid: session.live.pid }),
