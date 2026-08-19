@@ -84,27 +84,40 @@ export function normalizeSourceClock(
 }
 
 /**
- * Merge every source's sessions into one deduped list.
+ * Merge discovered sessions into one deduped, sorted list.
  *
- * @param groups - one array per source, already clock-normalized.
- * @param now - our clock, used only as the ceiling for a bad timestamp.
+ * The composed group is passed separately because its order is **structural**:
+ * it comes from {@link buildSessionInventory} and is the exact order the
+ * `SESSION_LIMIT` path promises as the close-candidate ranking. That order
+ * must be preserved verbatim — never re-sorted, never re-indexed by a
+ * collision with an earlier group.
+ *
+ * Every id present in `composed` wins outright; a matching entry in `groups`
+ * is dropped because `composed` carries both the live snapshot and the control
+ * channel. Entries within `groups` themselves dedupe by {@link ORIGIN_PRECEDENCE}
+ * (`live-external` over `resumable`), then sort most-recently-active first.
+ *
+ * @param composed - sessions from this composition, already in inventory order.
+ * @param groups - sessions from external sources, one array per source.
+ * @param now - our clock, used as the ceiling for a bad timestamp and as the
+ *   recency sort key.
  * @returns composed sessions in inventory order, then everything else
- *   most-recently-active first.
+ *   most-recently-active first, all deduped by id.
  */
 export function mergeDiscovered(
+  composed: readonly CcDiscoveredSession[],
   groups: readonly CcDiscoveredSession[][],
   now: number,
 ): CcDiscoveredSession[] {
+  const composedIds = new Set(composed.map(s => s.sessionId))
   const best = new Map<string, CcDiscoveredSession>()
-  const order = new Map<string, number>()
-  let index = 0
   for (const group of groups) {
     for (const session of group) {
+      // Skip entries whose id is already present in composed: they lose.
+      if (composedIds.has(session.sessionId)) continue
       const previous = best.get(session.sessionId)
       if (previous === undefined) {
         best.set(session.sessionId, session)
-        order.set(session.sessionId, index)
-        index += 1
         continue
       }
       const kept = ORIGIN_PRECEDENCE.indexOf(previous.origin)
@@ -112,18 +125,12 @@ export function mergeDiscovered(
       if (candidate < kept) best.set(session.sessionId, session)
     }
   }
-  const merged = [...best.values()]
-  const composed = merged.filter(session => session.origin === 'composed')
-  const rest = merged
-    .filter(session => session.origin !== 'composed')
+  const rest = [...best.values()]
     .sort((left, right) => {
       const activity = Math.min(now, right.lastActivityAt) - Math.min(now, left.lastActivityAt)
       // A total order, so the same inputs always render identically.
       return activity !== 0 ? activity : left.sessionId.localeCompare(right.sessionId)
     })
-  // Composed order is NOT re-sorted: it is the close-candidate promise.
-  composed.sort((left, right) =>
-    (order.get(left.sessionId) ?? 0) - (order.get(right.sessionId) ?? 0))
   return [...composed, ...rest]
 }
 
