@@ -651,8 +651,9 @@ export function apply(ctx: Context, _config: Config = {}): void {
       + 'yourself — the concurrency limit is service-wide, so sessions from OTHER dsh sessions sharing this host '
       + 'can be holding the slots. Set `include_closed: true` to also see recently-closed sessions and why each '
       + 'one ended. By default this only sees sessions THIS composition opened; set `scope: "host"` or `"mesh"` to '
-      + 'also find sessions running elsewhere that you did not open — those cannot be sent to, but they can be '
-      + 'forked with claude_code_open({ resume, fork: true }).',
+      + 'also find sessions running elsewhere that you did not open — those cannot be sent to. One on THIS host '
+      + 'can be forked with claude_code_open({ resume, fork: true }); one on another host cannot be continued '
+      + 'from here yet.',
     parameters: {
       include_closed: {
         type: 'boolean',
@@ -665,8 +666,9 @@ export function apply(ctx: Context, _config: Config = {}): void {
         description: 'How wide to look. "composition" (default) lists only sessions this dsh composition holds '
           + 'open — the sessions that occupy a concurrency slot. "host" adds sessions running elsewhere on this '
           + 'machine plus recently-used sessions on disk. "mesh" adds the other configured hosts. Use a wider '
-          + 'scope to find a session you did not open yourself; those cannot be sent to, but they can be forked '
-          + 'with claude_code_open({ resume, fork: true }).',
+          + 'scope to find a session you did not open yourself; those cannot be sent to. One on this host can be '
+          + 'forked with claude_code_open({ resume, fork: true }); one on another host cannot be continued from '
+          + 'here yet.',
       },
     },
     output: {
@@ -679,14 +681,16 @@ export function apply(ctx: Context, _config: Config = {}): void {
             type: 'array',
             items: DISCOVERED_SESSION_ITEM_SCHEMA,
             description: 'Sessions running elsewhere — on this host, or (with scope "mesh") another configured '
-              + 'host — that this composition did not open. Not sendable; fork one with claude_code_open({ '
-              + 'resume, fork: true }). Present only when `scope` is "host" or "mesh".',
+              + 'host — that this composition did not open. Not sendable. One with `host` equal to `this_host` '
+              + 'can be forked with claude_code_open({ resume, fork: true }); one on another host cannot be '
+              + 'continued from here yet. Present only when `scope` is "host" or "mesh".',
           },
           external_resumable: {
             type: 'array',
             items: DISCOVERED_SESSION_ITEM_SCHEMA,
-            description: 'Sessions known only from disk — not currently running anywhere. Resume or fork one '
-              + 'with claude_code_open. Present only when `scope` is "host" or "mesh".',
+            description: 'Sessions known only from disk — not currently running anywhere. One with `host` equal '
+              + 'to `this_host` can be resumed or forked with claude_code_open; one on another host cannot be '
+              + 'continued from here yet. Present only when `scope` is "host" or "mesh".',
           },
           warnings: {
             type: 'array',
@@ -694,6 +698,12 @@ export function apply(ctx: Context, _config: Config = {}): void {
             description: 'Discovery sources that could not be reached, e.g. "b2hx: unreachable (...)" — named so '
               + 'a wide search that found nothing can be told apart from a search that could not look. Present '
               + 'only when `scope` is "host" or "mesh".',
+          },
+          this_host: {
+            type: 'string',
+            description: 'This composition\'s own host label. Compare it against a row\'s `host` to tell which '
+              + 'external sessions can actually be forked from here. Present only when `scope` is "host" or '
+              + '"mesh".',
           },
         },
       },
@@ -706,7 +716,8 @@ export function apply(ctx: Context, _config: Config = {}): void {
               value.external_live ?? [],
               value.external_resumable ?? [],
               value.warnings ?? [],
-              args.scope),
+              args.scope,
+              value.this_host ?? ''),
       } satisfies ContentBlock],
     },
     async execute(args) {
@@ -730,6 +741,10 @@ export function apply(ctx: Context, _config: Config = {}): void {
         external_live: projectDiscovered(groups.liveExternal, now),
         external_resumable: projectDiscovered(groups.resumable, now),
         warnings: [...discovered.warnings],
+        // The seam already resolves and carries this host's own label
+        // (`config.hostLabel`); reusing it here is what lets the render step
+        // tell a fork-able row apart from one on another host, per row.
+        this_host: ctx.claudeCode.config.hostLabel,
       }
     },
     presentCall: () => genericCall('List Claude Code sessions'),

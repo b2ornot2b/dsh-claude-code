@@ -516,16 +516,22 @@ interface RawRegistryFile {
  * rather than reported — the transcript-store reader will still surface it as
  * `resumable` if it falls inside the recency window.
  *
+ * A failure to read the registry DIRECTORY ITSELF (missing, unreadable) is
+ * left to propagate rather than swallowed to `[]` here: `createLocalSource`'s
+ * `deps.readRegistry().catch(...)` already turns a rejection into a named
+ * `warnings` entry, the same channel `claude-inventory` (this reader's probe
+ * counterpart) uses for the identical condition. Swallowing it here would
+ * make an unreadable store indistinguishable from "no live sessions" — the
+ * "nothing exists" vs "I could not look" ambiguity this feature exists to
+ * eliminate. A per-FILE failure inside the loop below stays swallowed: one
+ * corrupt registry file must not cost every other session in it.
+ *
  * @returns live registry entries, one per pid confirmed to still exist.
+ * @throws when the registry directory cannot be listed (missing, unreadable).
  */
 export async function readLocalRegistry(): Promise<CcRegistryEntry[]> {
   const root = join(homedir(), '.claude', 'sessions')
-  let names: string[]
-  try {
-    names = await readdir(root)
-  } catch {
-    return []
-  }
+  const names = await readdir(root)
 
   const entries: CcRegistryEntry[] = []
   for (const name of names) {

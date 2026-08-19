@@ -51,7 +51,7 @@ def proc_start(pid):
     out = done.stdout.strip()
     return out or None
 
-def read_live(home, warnings):
+def read_live(home, warnings, want_titles):
     """Read the live-session registry, keeping only entries whose process runs."""
     root = os.path.join(home, ".claude", "sessions")
     if not os.path.isdir(root):
@@ -83,7 +83,12 @@ def read_live(home, warnings):
         liveness = "confirmed" if recorded and actual and recorded == actual else "assumed"
         row = {"sessionId": session_id, "pid": pid,
                "cwd": entry.get("cwd") or "", "liveness": liveness}
-        for key in ("name", "kind", "entrypoint", "startedAt", "version"):
+        # `name` is the one field --no-titles exists to withhold (design §12):
+        # Claude Code derives it from conversation content, so it can carry
+        # the same sensitive text as a resumable session's title.
+        keys = ("kind", "entrypoint", "startedAt", "version") if not want_titles \
+            else ("name", "kind", "entrypoint", "startedAt", "version")
+        for key in keys:
             if entry.get(key) is not None:
                 row[key] = entry[key]
         live.append(row)
@@ -196,7 +201,7 @@ def main(argv=None):
         warnings.append("%s: no Claude Code state directory on this host" % claude_dir)
         live, resumable = [], []
     else:
-        live = read_live(args.home, warnings)
+        live = read_live(args.home, warnings, not args.no_titles)
         resumable = read_resumable(args.home, args.window_ms, args.max_resumable,
                                    not args.no_titles, warnings)
     versions = [row["version"] for row in live if row.get("version")]

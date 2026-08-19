@@ -48,6 +48,27 @@ describe('parseProbeOutput', () => {
     expect(result.warnings.join('\n')).toContain('unreadable')
   })
 
+  it('warns and skips a row missing sessionId, instead of silently dropping it', () => {
+    // A silently-dropped row is indistinguishable from "nothing was there" —
+    // exactly the ambiguity this whole branch exists to eliminate (an empty
+    // list with zero warnings must never happen when the probe actually saw
+    // something it could not parse).
+    const raw = JSON.stringify({
+      schema: PROBE_SCHEMA_MAJOR,
+      host: 'b2umini',
+      generatedAt: 1,
+      live: [{ cwd: '/tmp', liveness: 'assumed' }],
+      resumable: [{ cwd: '/tmp', lastModified: 1 }],
+    })
+
+    const result = parseProbeOutput(raw, CONTEXT)
+
+    expect(result.sessions).toEqual([])
+    expect(result.warnings.join('\n')).toContain('b2umini')
+    expect(result.warnings.join('\n')).toContain('live row missing sessionId')
+    expect(result.warnings.join('\n')).toContain('resumable row missing sessionId')
+  })
+
   it('refuses an unknown schema major with a warning and no sessions', () => {
     const raw = JSON.stringify({ schema: 99, host: 'b2umini', generatedAt: 1, live: [], resumable: [] })
 
@@ -73,6 +94,28 @@ describe('parseProbeOutput', () => {
     // 351-character raw stream) is not.
     expect(warning).toContain(raw.trim().slice(0, 200))
     expect(warning).not.toContain(raw.trim().slice(0, 201))
+  })
+
+  it('reports no title for a live row that carries no name', () => {
+    // Mirrors the probe's --no-titles behaviour: when the probe withholds
+    // `name` (design §12's includeTitles control), the parser must not
+    // invent a title from anywhere else.
+    const raw = JSON.stringify({
+      schema: PROBE_SCHEMA_MAJOR,
+      host: 'b2umini',
+      generatedAt: 1,
+      live: [{
+        sessionId: '889cd0f8-30f5-4469-b63a-086d93cbb047',
+        pid: 3796, cwd: '/Users/b2/Developer/mine/grigios',
+        kind: 'interactive', liveness: 'assumed',
+      }],
+      resumable: [],
+    })
+
+    const result = parseProbeOutput(raw, CONTEXT)
+
+    expect(result.sessions).toHaveLength(1)
+    expect(result.sessions[0]?.title).toBeUndefined()
   })
 
   it('translates a live cwd through the path map, preserving the original as remoteCwd', () => {

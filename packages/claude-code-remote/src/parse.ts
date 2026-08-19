@@ -94,7 +94,13 @@ export function parseProbeOutput(raw: string, context: CcParseContext): CcDiscov
   for (const raw of liveRows) {
     const entry = raw as Record<string, unknown>
     const sessionId = entry['sessionId']
-    if (typeof sessionId !== 'string') continue
+    if (typeof sessionId !== 'string') {
+      // Silently dropping this row would look identical to "nothing live" —
+      // exactly the "nothing exists" vs "I could not look" ambiguity this
+      // branch exists to eliminate.
+      warnings.push(`${context.host}: live row missing sessionId, skipped`)
+      continue
+    }
     const startedAt = typeof entry['startedAt'] === 'number' ? entry['startedAt'] : generatedAt
     const name = entry['name']
     const pid = entry['pid']
@@ -127,7 +133,10 @@ export function parseProbeOutput(raw: string, context: CcParseContext): CcDiscov
   for (const raw of resumableRows) {
     const entry = raw as Record<string, unknown>
     const sessionId = entry['sessionId']
-    if (typeof sessionId !== 'string') continue
+    if (typeof sessionId !== 'string') {
+      warnings.push(`${context.host}: resumable row missing sessionId, skipped`)
+      continue
+    }
     const lastModified = entry['lastModified']
     const title = entry['title']
     const gitBranch = entry['gitBranch']

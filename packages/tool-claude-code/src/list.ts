@@ -349,16 +349,37 @@ function renderEmptyWide(scope: CcDiscoveryScope, warnings: readonly string[]): 
 }
 
 /**
- * One row of a discovered-sessions section: id, host, idle time, cwd, and the
- * title when the source reported one — the same shape whether the section is
- * "running elsewhere" or "resumable", so a reader learns the row format once.
+ * One row of a discovered-sessions section: id, host, timing, cwd, the title
+ * when the source reported one, and what CAN be done with it from here.
+ *
+ * `isLive` picks the timing WORD, not the number: `idle_ms` is `lastActivityAt`
+ * under the hood, and for a `live-external` row `lastActivityAt` is the
+ * session's START time (discovery has no other clock to read), not its last
+ * activity — a session open two hours and actively working must not render as
+ * "idle 2h". A resumable row's timestamp really is last activity, so it keeps
+ * "idle".
+ *
+ * The fork instruction is scoped to `localHost`: cross-host transcript
+ * adoption is a later phase and is not built (design §8.2), so a row on
+ * another host would hand a model an instruction that ends in an opaque
+ * backend error.
+ *
  * @param entry - the projected entry.
  * @param index - its position in the section, for the numbered line.
+ * @param localHost - this composition's own host label.
+ * @param isLive - whether this row is from the "running elsewhere" section.
  * @returns the row text.
  */
-function renderDiscoveredRow(entry: CcDiscoveredListEntry, index: number): string {
-  return `  ${index + 1}. ${entry.session_id}  ${entry.host}  idle ${formatWaiting(entry.idle_ms)}  ${entry.cwd}`
+function renderDiscoveredRow(
+  entry: CcDiscoveredListEntry, index: number, localHost: string, isLive: boolean,
+): string {
+  const timing = isLive ? 'open' : 'idle'
+  const action = entry.host === localHost
+    ? 'fork with claude_code_open({ resume, fork: true })'
+    : 'not resumable from here yet'
+  return `  ${index + 1}. ${entry.session_id}  ${entry.host}  ${timing} ${formatWaiting(entry.idle_ms)}  ${entry.cwd}`
     + (entry.title === undefined ? '' : `  "${entry.title}"`)
+    + `  — ${action}`
 }
 
 /**
@@ -371,9 +392,11 @@ function renderDiscoveredRow(entry: CcDiscoveredListEntry, index: number): strin
  * here) and "what can I work with" (everything else, most-recent first, as
  * `groupByOrigin` already hands it over). A session from another origin is
  * never sendable — nothing outside this composition holds its control
- * channel — so its section says what CAN be done with it instead of leaving
- * a model to try `claude_code_send` and fail: fork it with
- * `claude_code_open({ resume, fork: true })`.
+ * channel. What it CAN do instead is stated per row, not in the section
+ * header: only a row on `localHost` may be forked with
+ * `claude_code_open({ resume, fork: true })` — cross-host adoption is not
+ * built (design §8.2), so a row on another host says so plainly instead of
+ * teaching an instruction that fails.
  *
  * @param composedText - `renderSessionList` applied to this composition's own
  *   sessions — passed in, not recomputed, so this function stays a pure
@@ -382,6 +405,8 @@ function renderDiscoveredRow(entry: CcDiscoveredListEntry, index: number): strin
  * @param resumable - sessions known only from disk, most-recently-active first.
  * @param warnings - discovery's named degradations.
  * @param scope - the scope that was searched, for the empty-state prose.
+ * @param localHost - this composition's own host label, so each row can say
+ *   whether IT is one of the rows that may be forked from here.
  * @returns the model-facing prose.
  */
 export function renderWideList(
@@ -390,17 +415,19 @@ export function renderWideList(
   resumable: readonly CcDiscoveredListEntry[],
   warnings: readonly string[],
   scope: CcDiscoveryScope,
+  localHost: string,
 ): string {
   if (composedText === EMPTY_SESSION_LIST && live.length === 0 && resumable.length === 0) {
     return renderEmptyWide(scope, warnings)
   }
   const sections = [composedText]
   if (live.length > 0) {
-    sections.push(`Running elsewhere (not sendable — fork to continue with claude_code_open({ resume, fork: true })):\n`
-      + live.map(renderDiscoveredRow).join('\n'))
+    sections.push('Running elsewhere (not sendable):\n'
+      + live.map((entry, index) => renderDiscoveredRow(entry, index, localHost, true)).join('\n'))
   }
   if (resumable.length > 0) {
-    sections.push(`Resumable (on disk, not running):\n${resumable.map(renderDiscoveredRow).join('\n')}`)
+    sections.push('Resumable (on disk, not running):\n'
+      + resumable.map((entry, index) => renderDiscoveredRow(entry, index, localHost, false)).join('\n'))
   }
   if (warnings.length > 0) {
     sections.push(`Warnings:\n${warnings.map((warning, index) => `  ${index + 1}. ${warning}`).join('\n')}`)

@@ -25,7 +25,7 @@ interface ProbeOutput {
   host: string
   generatedAt: number
   home: string
-  live: { sessionId: string, pid: number, cwd: string, name?: string, liveness: string }[]
+  live: { sessionId: string, pid: number, cwd: string, name?: string, kind?: string, liveness: string }[]
   resumable: { sessionId: string, cwd: string, lastModified: number, sizeBytes: number, title?: string, gitBranch?: string, createdAt?: number }[]
   warnings: string[]
 }
@@ -109,6 +109,30 @@ describe('claude-inventory live sessions', () => {
     expect(out.live[0]?.liveness).toMatch(/^(confirmed|assumed)$/)
     // The dead entry is not live, and the probe never deletes the file it read.
     expect(out.live.some(entry => entry.pid === DEAD_PID)).toBe(false)
+  })
+
+  it('honours --no-titles by dropping the live entry\'s name too', () => {
+    // `discovery.includeTitles: false` exists to keep names/prompt text off
+    // the mesh (design §12). The local source already gates `name` behind
+    // it; this proves the probe path — the ONLY path a remote host's live
+    // sessions travel by — agrees, rather than leaking a name the local half
+    // of the same control withholds.
+    const home = fixtureHome({
+      'alive.json': {
+        pid: process.pid,
+        sessionId: '11111111-1111-4111-8111-111111111111',
+        cwd: '/Users/b2/Developer/mine/b2infra',
+        kind: 'interactive',
+        name: 'b2infra-bd',
+      },
+    })
+
+    const out = runProbe(home, '--no-titles')
+
+    expect(out.live).toHaveLength(1)
+    expect(out.live[0]?.name).toBeUndefined()
+    // The rest of the row survives — only the title-bearing field is scrubbed.
+    expect(out.live[0]?.kind).toBe('interactive')
   })
 })
 

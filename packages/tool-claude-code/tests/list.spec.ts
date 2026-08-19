@@ -374,8 +374,70 @@ describe('claude_code_list scope', () => {
       expect(composedIndex).toBeGreaterThanOrEqual(0)
       expect(liveIndex).toBeGreaterThan(composedIndex)
       expect(resumableIndex).toBeGreaterThan(liveIndex)
-      expect(rendered).toContain('fork')          // says what CAN be done with it
+      // 'b2umini' is not this composition's own host, so cross-host adoption
+      // (design §8.2, not built) means neither row may be forked from here —
+      // says so plainly rather than teaching claude_code_open({ resume, fork:
+      // true }), which would fail opaquely against a session this host's
+      // store has never heard of.
+      expect(rendered).toContain('not resumable from here yet')
+      expect(rendered).not.toContain('fork with claude_code_open')
       expect(rendered).toContain('b2umini')
+    } finally {
+      await harness.dispose()
+    }
+  })
+
+  it('scopes the fork instruction to a row on THIS host, and refuses it for a row on another host', async () => {
+    const harness = await mountTools()
+    try {
+      const thisHost = harness.ctx.claudeCode.config.hostLabel
+
+      harness.ctx.claudeCode.registerDiscoverySource({
+        id: 'remote:this-host',
+        host: thisHost,
+        discover: async request => Promise.resolve({
+          generatedAt: request.now,
+          cached: false,
+          warnings: [],
+          sessions: [{
+            sessionId: 'aaaaaaaa-1111-4111-8111-111111111111' as CcSessionId,
+            origin: 'live-external' as const, host: thisHost, sourceId: 'remote:this-host',
+            cwd: '/tmp/local', title: 'local-session',
+            lastActivityAt: request.now - 60_000, sendable: false, resumable: true,
+            fidelity: 'probe' as const, live: { liveness: 'assumed' as const },
+          }],
+        }),
+      })
+      harness.ctx.claudeCode.registerDiscoverySource({
+        id: 'remote:b2hx',
+        host: 'b2hx',
+        discover: async request => Promise.resolve({
+          generatedAt: request.now,
+          cached: false,
+          warnings: [],
+          sessions: [{
+            sessionId: 'bbbbbbbb-2222-4222-8222-222222222222' as CcSessionId,
+            origin: 'live-external' as const, host: 'b2hx', sourceId: 'remote:b2hx',
+            cwd: '/tmp/remote', title: 'remote-session',
+            lastActivityAt: request.now - 60_000, sendable: false, resumable: true,
+            fidelity: 'probe' as const, live: { liveness: 'assumed' as const },
+          }],
+        }),
+      })
+
+      const result = await harness.call('claude_code_list', { scope: 'mesh' })
+      const rendered = text(result)
+      const value = result.value as { this_host?: string }
+
+      expect(value.this_host).toBe(thisHost)
+      // The local row: fork is offered, unqualified.
+      const localLine = rendered.split('\n').find(line => line.includes('local-session'))
+      expect(localLine).toContain('fork with claude_code_open({ resume, fork: true })')
+      // The remote row: fork is explicitly refused, never an unqualified
+      // "fork with claude_code_open" instruction that would fail opaquely.
+      const remoteLine = rendered.split('\n').find(line => line.includes('remote-session'))
+      expect(remoteLine).toContain('not resumable from here yet')
+      expect(remoteLine).not.toContain('fork with claude_code_open')
     } finally {
       await harness.dispose()
     }

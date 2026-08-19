@@ -70,4 +70,24 @@ describe('readLocalRegistry', () => {
       await rm(root, { recursive: true, force: true })
     }
   })
+
+  it('propagates a missing sessions directory instead of swallowing it to []', async () => {
+    // `claude-inventory` (the probe this reader mirrors) WARNS on the same
+    // condition (design §5.2/§10). Silently returning `[]` here would make
+    // "the store is unreadable" indistinguishable from "no live sessions" —
+    // a source with no live sessions is exactly what a laptop that has never
+    // run Claude Code looks like, and this reader must not claim that. The
+    // caller (`createLocalSource`'s `deps.readRegistry().catch(...)`) is what
+    // turns this rejection into a named `warnings` entry.
+    const root = await mkdtemp(join(tmpdir(), 'dsh-cc-registry-empty-'))
+    const previousHome = process.env.HOME
+    process.env.HOME = root
+    try {
+      await expect(readLocalRegistry()).rejects.toThrow()
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME
+      else process.env.HOME = previousHome
+      await rm(root, { recursive: true, force: true })
+    }
+  })
 })
