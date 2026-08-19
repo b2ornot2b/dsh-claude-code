@@ -284,3 +284,84 @@ describe('projectSessions', () => {
     expect(renderSessionList(sessions, false)).not.toContain('NaN')
   })
 })
+
+describe('claude_code_list scope', () => {
+  it('defaults to composition and renders exactly the legacy text', async () => {
+    const harness = await mountTools()
+    try {
+      const result = await harness.call('claude_code_list', {})
+
+      expect(result.value).toEqual({ sessions: [] })
+      expect(text(result)).toBe(EMPTY_SESSION_LIST)
+    } finally {
+      await harness.dispose()
+    }
+  })
+
+  it('names what it searched and what failed when a wide scope finds nothing', async () => {
+    const harness = await mountTools()
+    try {
+      harness.ctx.claudeCode.registerDiscoverySource({
+        id: 'remote:b2hx',
+        host: 'b2hx',
+        discover: async () => Promise.reject(new Error('unreachable (ssh connect timeout 6000ms)')),
+      })
+
+      const result = await harness.call('claude_code_list', { scope: 'mesh' })
+
+      // "nothing exists" and "I could not look" must never render alike.
+      expect(text(result)).not.toBe(EMPTY_SESSION_LIST)
+      expect(text(result)).toContain('b2hx')
+      expect(text(result)).toContain('unreachable')
+      expect((result.value as { warnings?: string[] }).warnings?.length).toBe(1)
+    } finally {
+      await harness.dispose()
+    }
+  })
+
+  it('groups external live and resumable sessions with their hosts', async () => {
+    const harness = await mountTools()
+    try {
+      harness.ctx.claudeCode.registerDiscoverySource({
+        id: 'remote:b2umini',
+        host: 'b2umini',
+        discover: async request => Promise.resolve({
+          generatedAt: request.now,
+          cached: false,
+          warnings: [],
+          sessions: [{
+            sessionId: '889cd0f8-30f5-4469-b63a-086d93cbb047' as CcSessionId,
+            origin: 'live-external' as const, host: 'b2umini', sourceId: 'remote:b2umini',
+            cwd: '/Users/b2/Developer/mine/grigios', title: 'grigios-cb',
+            lastActivityAt: request.now - 600_000, sendable: false, resumable: true,
+            fidelity: 'probe' as const, live: { liveness: 'assumed' as const, pid: 3796 },
+          }, {
+            sessionId: '43bc3d80-fb06-4f6e-805f-f3eeff272690' as CcSessionId,
+            origin: 'resumable' as const, host: 'b2umini', sourceId: 'remote:b2umini',
+            cwd: '/Users/b2/Developer/mine/grigios', title: 'fix the thing',
+            lastActivityAt: request.now - 3_600_000, sendable: false, resumable: true,
+            fidelity: 'probe' as const,
+          }],
+        }),
+      })
+
+      const result = await harness.call('claude_code_list', { scope: 'mesh' })
+      const value = result.value as {
+        external_live: { session_id: string, host: string, sendable: boolean }[]
+        external_resumable: { session_id: string }[]
+      }
+
+      expect(value.external_live).toHaveLength(1)
+      expect(value.external_live[0]?.host).toBe('b2umini')
+      expect(value.external_live[0]?.sendable).toBe(false)
+      expect(value.external_resumable).toHaveLength(1)
+      const rendered = text(result)
+      expect(rendered).toContain('Running elsewhere')
+      expect(rendered).toContain('fork')          // says what CAN be done with it
+      expect(rendered).toContain('Resumable')
+      expect(rendered).toContain('b2umini')
+    } finally {
+      await harness.dispose()
+    }
+  })
+})
