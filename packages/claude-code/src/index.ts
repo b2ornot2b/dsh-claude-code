@@ -110,6 +110,9 @@ export {
   projectComposed,
 } from './discovery.ts'
 
+export { createLocalSource } from './discovery-local.ts'
+export type { CcLocalSourceDeps, CcRegistryEntry, CcStoreEntry } from './discovery-local.ts'
+
 export { createInputStream } from './input-stream.ts'
 export type { CcInputStream, CcUserMessageInit } from './input-stream.ts'
 

@@ -83,6 +83,7 @@ const RUNTIME_EXPORTS = [
   'attachMirror',
   'buildSessionEnv',
   'createInputStream',
+  'createLocalSource',
   'defaultHostLabel',
   'describeCall',
   'describeReason',
