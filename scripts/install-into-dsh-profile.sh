@@ -27,8 +27,8 @@ PATCH="$PROFILE_DIR/cordis.patch.yml"
 MARK_BEGIN="# BEGIN dsh-claude-code (managed by scripts/install-into-dsh-profile.sh)"
 MARK_END="# END dsh-claude-code"
 
-PKGS=(claude-code tool-claude-code claude-code-agent)
-NAMES=(dsh-claude-code dsh-tool-claude-code dsh-claude-code-agent)
+PKGS=(claude-code tool-claude-code claude-code-agent claude-code-remote)
+NAMES=(dsh-claude-code dsh-tool-claude-code dsh-claude-code-agent dsh-claude-code-remote)
 
 [[ -d "$PROFILE_DIR" ]] || { echo "no such profile: $PROFILE_DIR" >&2; exit 1; }
 

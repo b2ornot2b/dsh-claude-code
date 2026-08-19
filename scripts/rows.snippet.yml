@@ -28,3 +28,22 @@
       name: '@deepseek-ai/dsh-tool-claude-code'
     - id: claude-code-agent
       name: '@deepseek-ai/dsh-claude-code-agent'
+    # Session discovery on OTHER hosts. Optional: without this row the seam
+    # still discovers this host's own sessions, and `claude_code_list` still
+    # accepts every scope — a wider scope simply finds nothing elsewhere.
+    #
+    # `hosts` is site-specific and has no sensible default, so there is none:
+    # each entry needs either `ssh` (with the plugin-wide `probe` path) or its
+    # own `argv`. Point `probe` at scripts/claude-inventory as deployed on the
+    # REMOTE host — the path is resolved there, not here.
+    #
+    # `pathMap` exists because the same repository can sit at different
+    # absolute paths per host (an NFS or bind-mount view). Rewrites are applied
+    # longest-prefix-first and only on whole path segments.
+    - id: claude-code-remote
+      name: '@deepseek-ai/dsh-claude-code-remote'
+      config:
+        probe: /path/to/claude-inventory
+        connectTimeoutMs: 6000
+        hosts: []
+        pathMap: []
