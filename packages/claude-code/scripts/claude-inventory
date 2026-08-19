@@ -18,6 +18,8 @@ import sys
 import time
 
 SCHEMA = 1
+PROMPT_SCAN_LINES = 40
+TITLE_MAX = 160
 
 def now_ms():
     """Return the wall clock in integer milliseconds since the epoch."""
@@ -82,6 +84,92 @@ def read_live(home, warnings):
         live.append(row)
     return live
 
+def first_text(content):
+    """Extract plain text from a transcript message's content field."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "text":
+                text = part.get("text")
+                if isinstance(text, str) and text.strip():
+                    return text
+    return None
+
+def read_transcript_head(path, want_title):
+    """Read the leading lines of a transcript for its metadata.
+
+    Only the first PROMPT_SCAN_LINES lines are parsed: transcripts reach tens of
+    megabytes (design P10) and everything needed sits at the top.
+    """
+    meta = {}
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            for index, line in enumerate(handle):
+                if index >= PROMPT_SCAN_LINES:
+                    break
+                try:
+                    entry = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(entry, dict):
+                    continue
+                for key in ("cwd", "gitBranch", "sessionId"):
+                    if key not in meta and entry.get(key):
+                        meta[key] = entry[key]
+                if want_title and "title" not in meta and entry.get("type") == "user":
+                    message = entry.get("message")
+                    text = first_text(message.get("content")) if isinstance(message, dict) else None
+                    # A hook or system reminder is not what a person would call
+                    # the session; skip to the first prompt that reads as one.
+                    if text and not text.lstrip().startswith("<"):
+                        meta["title"] = " ".join(text.split())[:TITLE_MAX]
+    except OSError:
+        return None
+    return meta
+
+def read_resumable(home, window_ms, limit, want_titles, warnings):
+    """Scan the transcript store for recently-active sessions, newest first."""
+    root = os.path.join(home, ".claude", "projects")
+    if not os.path.isdir(root):
+        warnings.append("%s: not a directory" % root)
+        return []
+    cutoff = time.time() - (window_ms / 1000.0)
+    candidates = []
+    for slug in os.listdir(root):
+        slug_dir = os.path.join(root, slug)
+        try:
+            names = os.listdir(slug_dir)
+        except OSError:
+            continue
+        for name in names:
+            if not name.endswith(".jsonl"):
+                continue
+            path = os.path.join(slug_dir, name)
+            try:
+                stat = os.stat(path)
+            except OSError:
+                continue
+            if stat.st_mtime < cutoff:
+                continue
+            candidates.append((stat.st_mtime, stat.st_size, path, name[:-len(".jsonl")]))
+    candidates.sort(reverse=True)
+    rows = []
+    for mtime, size, path, stem in candidates[:max(0, limit)]:
+        meta = read_transcript_head(path, want_titles)
+        if meta is None:
+            warnings.append("%s: unreadable" % path)
+            continue
+        row = {"sessionId": meta.get("sessionId") or stem,
+               "cwd": meta.get("cwd") or "",
+               "lastModified": int(mtime * 1000),
+               "sizeBytes": size}
+        for key in ("gitBranch", "title"):
+            if meta.get(key):
+                row[key] = meta[key]
+        rows.append(row)
+    return rows
+
 def main(argv=None):
     """Parse arguments, build the inventory, print it as JSON."""
     parser = argparse.ArgumentParser(prog="claude-inventory")
@@ -93,9 +181,11 @@ def main(argv=None):
 
     warnings = []
     live = read_live(args.home, warnings)
+    resumable = read_resumable(args.home, args.window_ms, args.max_resumable,
+                               not args.no_titles, warnings)
     versions = [row["version"] for row in live if row.get("version")]
     out = {"schema": SCHEMA, "host": host_label(), "generatedAt": now_ms(),
-           "home": args.home, "live": live, "resumable": [], "warnings": warnings}
+           "home": args.home, "live": live, "resumable": resumable, "warnings": warnings}
     if versions:
         out["claudeVersion"] = sorted(versions)[-1]
     json.dump(out, sys.stdout)

@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -56,6 +56,25 @@ function runProbe(home: string, ...args: string[]): ProbeOutput {
   return JSON.parse(raw) as ProbeOutput
 }
 
+/**
+ * Write a transcript into a fixture home's store.
+ * @param home - the fixture home.
+ * @param slug - the project slug directory name.
+ * @param id - the session id.
+ * @param lines - JSONL entries.
+ * @param ageMs - how long ago the file was last modified.
+ */
+function writeTranscript(
+  home: string, slug: string, id: string, lines: unknown[], ageMs: number,
+): void {
+  const dir = join(home, '.claude', 'projects', slug)
+  mkdirSync(dir, { recursive: true })
+  const file = join(dir, `${id}.jsonl`)
+  writeFileSync(file, `${lines.map(line => JSON.stringify(line)).join('\n')}\n`)
+  const when = (Date.now() - ageMs) / 1000
+  utimesSync(file, when, when)
+}
+
 describe('claude-inventory live sessions', () => {
   it('reports a live session and drops one whose process is gone', () => {
     const home = fixtureHome({
@@ -90,5 +109,48 @@ describe('claude-inventory live sessions', () => {
     expect(out.live[0]?.liveness).toMatch(/^(confirmed|assumed)$/)
     // The dead entry is not live, and the probe never deletes the file it read.
     expect(out.live.some(entry => entry.pid === DEAD_PID)).toBe(false)
+  })
+})
+
+describe('claude-inventory resumable sessions', () => {
+  it('reports windowed transcripts newest-first with cwd, branch and a title', () => {
+    const home = fixtureHome({})
+    writeTranscript(home, '-Users-b2-Developer-mine-b2infra',
+      '33333333-3333-4333-8333-333333333333', [
+        { type: 'user', cwd: '/Users/b2/Developer/mine/b2infra', gitBranch: 'main',
+          sessionId: '33333333-3333-4333-8333-333333333333',
+          message: { role: 'user', content: 'plan the session discovery work' } },
+      ], 60_000)
+    writeTranscript(home, '-Users-b2-Developer-mine-old',
+      '44444444-4444-4444-8444-444444444444', [
+        { type: 'user', cwd: '/Users/b2/Developer/mine/old',
+          message: { role: 'user', content: 'ancient work' } },
+      ], 30 * 24 * 60 * 60 * 1000)
+
+    const out = runProbe(home)
+
+    // The 30-day-old transcript is outside the default 7-day window.
+    expect(out.resumable.map(entry => entry.sessionId))
+      .toEqual(['33333333-3333-4333-8333-333333333333'])
+    const [entry] = out.resumable as { cwd: string, gitBranch?: string, title?: string,
+      sizeBytes: number, lastModified: number }[]
+    expect(entry?.cwd).toBe('/Users/b2/Developer/mine/b2infra')
+    expect(entry?.gitBranch).toBe('main')
+    expect(entry?.title).toContain('plan the session discovery')
+    expect(entry?.sizeBytes).toBeGreaterThan(0)
+  })
+
+  it('honours --window-ms, --max-resumable and --no-titles', () => {
+    const home = fixtureHome({})
+    for (let index = 0; index < 3; index += 1) {
+      writeTranscript(home, `-slug-${index}`, `5555555${index}-5555-4555-8555-555555555555`, [
+        { type: 'user', cwd: `/tmp/p${index}`, message: { role: 'user', content: `prompt ${index}` } },
+      ], (index + 1) * 60_000)
+    }
+
+    expect(runProbe(home, '--max-resumable', '2').resumable).toHaveLength(2)
+    expect(runProbe(home, '--window-ms', '90000').resumable).toHaveLength(1)
+    const scrubbed = runProbe(home, '--no-titles').resumable as { title?: string }[]
+    expect(scrubbed.every(entry => entry.title === undefined)).toBe(true)
   })
 })
