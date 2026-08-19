@@ -45,6 +45,29 @@ export interface CcProbeSourceOptions {
 }
 
 /**
+ * Compose the `Error` surfaced for a failed probe run.
+ *
+ * Node's `execFile` already folds the child's stderr into `error.message`
+ * for a non-zero exit or a `timeout`-triggered kill — the message literally
+ * contains the same text this function would otherwise append, so
+ * appending stderr unconditionally printed every such failure twice (the
+ * longest line in a host listing, doubled, plus a stray `: ` where the
+ * duplicate's leading newline landed). An aborted run is the one path
+ * where `error.message` stays generic ("The operation was aborted") while
+ * stderr captured before the abort is the only useful signal — so stderr
+ * is appended only when the message does not already contain it. Both
+ * sides are trimmed first so a trailing newline from stderr, or from
+ * execFile's own "Command failed: …\n" prefix, never leaves a bare colon
+ * on its own line.
+ */
+function composeProbeError(error: Error, stderr: string): Error {
+  const message = error.message.trim()
+  const trimmedStderr = stderr.trim()
+  if (trimmedStderr === '' || message.includes(trimmedStderr)) return new Error(message)
+  return new Error(`${message}: ${trimmedStderr}`)
+}
+
+/**
  * Run an argv to completion via `child_process.execFile`.
  *
  * @param argv - the command and its arguments; `argv[0]` is the executable.
@@ -65,7 +88,7 @@ async function runArgv(argv: readonly string[], timeoutMs: number, signal?: Abor
       ...(signal === undefined ? {} : { signal }),
     }, (error, stdout, stderr) => {
       if (error !== null) {
-        reject(new Error(`${error.message}${stderr === '' ? '' : `: ${stderr.trim()}`}`))
+        reject(composeProbeError(error, stderr))
         return
       }
       resolve({ stdout, stderr })
