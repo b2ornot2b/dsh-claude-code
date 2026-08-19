@@ -125,6 +125,22 @@ importers:
         specifier: 0.1.0-rc.7
         version: 0.1.0-rc.7(1dcde9bfc9fa0140c66648fbcb67b346)
 
+  packages/claude-code-remote:
+    dependencies:
+      '@deepseek-ai/schemastery':
+        specifier: 3.18.1
+        version: 3.18.1
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: 4.0.1
+        version: 4.0.1(@deepseek-ai/cordis-plugin-include@1.0.6)(@deepseek-ai/cordis-plugin-loader@1.0.2)
+      '@deepseek-ai/dsh-claude-code':
+        specifier: workspace:*
+        version: link:../claude-code
+      '@deepseek-ai/dsh-session':
+        specifier: 0.1.0-rc.7
+        version: 0.1.0-rc.7(1dcde9bfc9fa0140c66648fbcb67b346)
+
   packages/tool-claude-code:
     dependencies:
       '@deepseek-ai/schemastery':
