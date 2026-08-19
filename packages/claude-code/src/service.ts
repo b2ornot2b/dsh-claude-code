@@ -477,7 +477,7 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
    * @returns never — always throws.
    * @throws {ClaudeCodeError} code `NOT_IMPLEMENTED`.
    */
-  discover(options?: CcDiscoverOptions): Promise<CcDiscoveryResult> {
+  async discover(options?: CcDiscoverOptions): Promise<CcDiscoveryResult> {
     void options
     throw new ClaudeCodeError('claude-code: discover() is not implemented yet', 'NOT_IMPLEMENTED')
   }
