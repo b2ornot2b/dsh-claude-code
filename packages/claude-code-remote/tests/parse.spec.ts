@@ -59,9 +59,48 @@ describe('parseProbeOutput', () => {
   })
 
   it('warns with a bounded excerpt when the output is not JSON', () => {
-    const result = parseProbeOutput('bash: claude-inventory: No such file or directory', CONTEXT)
+    // Comfortably longer than the 200-character excerpt bound, so truncation
+    // is actually exercised — a build with no truncation at all would fail
+    // this, where a short fixture would not have caught it.
+    const raw = `bash: claude-inventory: No such file or directory\n${'z'.repeat(300)}`
+    const result = parseProbeOutput(raw, CONTEXT)
 
     expect(result.sessions).toEqual([])
-    expect(result.warnings.join('\n')).toContain('No such file')
+    const warning = result.warnings.join('\n')
+    expect(warning).toContain('No such file')
+    // The excerpt ends EXACTLY at the 200-character boundary: the 200-char
+    // prefix is present, the 201-char prefix (and therefore the full
+    // 351-character raw stream) is not.
+    expect(warning).toContain(raw.trim().slice(0, 200))
+    expect(warning).not.toContain(raw.trim().slice(0, 201))
+  })
+
+  it('translates a live cwd through the path map, preserving the original as remoteCwd', () => {
+    // Every other case in this file uses an empty pathMap, which exercises
+    // parseProbeOutput only in the "nothing to translate" branch. This case
+    // proves translation is actually WIRED IN, not just correct in isolation
+    // (translatePath has its own full coverage in paths.spec.ts).
+    const context = {
+      sourceId: 'mesh:b2umini',
+      host: 'b2umini',
+      pathMap: [{ from: '/System/Volumes/Data/mnt/b2', to: '/Users/b2' }],
+    }
+    const raw = JSON.stringify({
+      schema: PROBE_SCHEMA_MAJOR,
+      host: 'b2umini',
+      generatedAt: 1,
+      live: [{
+        sessionId: '889cd0f8-30f5-4469-b63a-086d93cbb047',
+        pid: 3796, cwd: '/System/Volumes/Data/mnt/b2/Developer/mine/grigios',
+        liveness: 'assumed',
+      }],
+      resumable: [],
+    })
+
+    const result = parseProbeOutput(raw, context)
+
+    expect(result.sessions).toHaveLength(1)
+    expect(result.sessions[0]?.cwd).toBe('/Users/b2/Developer/mine/grigios')
+    expect(result.sessions[0]?.remoteCwd).toBe('/System/Volumes/Data/mnt/b2/Developer/mine/grigios')
   })
 })

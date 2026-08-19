@@ -153,13 +153,41 @@ export const inject = ['claudeCode']
  * failed reload, a composition teardown) removes every source it added and
  * none of another plugin's.
  *
+ * A host that cannot be turned into an argv (no `argv` of its own and no
+ * `config.probe` to build one from) is SKIPPED, not fatal to the others: the
+ * whole point of this package is that one bad host degrades gracefully while
+ * every other host keeps answering (`discover()` never rejects for the same
+ * reason). `apply()` runs once at mount time, before any `CcDiscoveryResult`
+ * exists to carry a `warnings` entry, so `ctx.logger` is the channel that
+ * carries the operator-facing "which host, and why" — silently dropping the
+ * host with no signal at all would be worse than the crash this replaces.
+ *
+ * Logged via `ctx.logger.info`, NOT `.warn`: cordis's `LoggerLevel` enum is
+ * `ERROR = 0, INFO = 1, WARN = 2, DEBUG = 3`, and the default exporter
+ * threshold (no exporter/logger `level` configured) is `LoggerLevel.INFO`.
+ * Since the skip test only forwards a message when `threshold >= level`,
+ * `.warn()` (level 2) is silently dropped under that default and never
+ * reaches `ctx.logger.buffer` — verified empirically against this repo's
+ * pinned cordis. `.info()` (level 1) is exactly what
+ * `claude-code-agent/src/index.ts`'s `MOUNT_MARKER`/`UNMOUNT_MARKER` already
+ * use for the same reason.
+ *
  * @param ctx - the cordis context; `ctx.claudeCode` must already be mounted (declared via `inject`).
  * @param config - validated {@link CcClaudeCodeRemoteConfig}.
  */
 export function apply(ctx: Context, config: CcClaudeCodeRemoteConfig = {}): void {
   for (const host of config.hosts ?? []) {
-    const hostArgv = host.argv ?? []
-    const argv = hostArgv.length > 0 ? hostArgv : buildSshArgv(host, config)
+    let argv: readonly string[]
+    try {
+      const hostArgv = host.argv ?? []
+      argv = hostArgv.length > 0 ? hostArgv : buildSshArgv(host, config)
+    } catch (error) {
+      ctx.logger.info(
+        `claude-code-remote: skipping host '${host.label}': `
+        + `${error instanceof Error ? error.message : String(error)}`,
+      )
+      continue
+    }
     const source = createProbeSource({
       id: `remote:${host.label}`,
       host: host.label,

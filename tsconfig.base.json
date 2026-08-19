@@ -51,7 +51,8 @@
     "paths": {
       "@deepseek-ai/dsh-claude-code": ["./packages/claude-code/src/index.ts"],
       "@deepseek-ai/dsh-tool-claude-code": ["./packages/tool-claude-code/src/index.ts"],
-      "@deepseek-ai/dsh-claude-code-agent": ["./packages/claude-code-agent/src/index.ts"]
+      "@deepseek-ai/dsh-claude-code-agent": ["./packages/claude-code-agent/src/index.ts"],
+      "@deepseek-ai/dsh-claude-code-remote": ["./packages/claude-code-remote/src/index.ts"]
     }
   }
 }
