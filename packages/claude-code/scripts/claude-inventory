@@ -58,7 +58,12 @@ def read_live(home, warnings):
         warnings.append("%s: not a directory" % root)
         return []
     live = []
-    for name in sorted(os.listdir(root)):
+    try:
+        names = sorted(os.listdir(root))
+    except OSError as e:
+        warnings.append("%s: unreadable (%s)" % (root, e.strerror or str(e)))
+        return []
+    for name in names:
         if not name.endswith(".json"):
             continue
         path = os.path.join(root, name)
@@ -136,7 +141,12 @@ def read_resumable(home, window_ms, limit, want_titles, warnings):
         return []
     cutoff = time.time() - (window_ms / 1000.0)
     candidates = []
-    for slug in os.listdir(root):
+    try:
+        slugs = os.listdir(root)
+    except OSError as e:
+        warnings.append("%s: unreadable (%s)" % (root, e.strerror or str(e)))
+        return []
+    for slug in slugs:
         slug_dir = os.path.join(root, slug)
         try:
             names = os.listdir(slug_dir)

@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync, utimesSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, utimesSync, chmodSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -181,5 +181,71 @@ describe('claude-inventory degradation', () => {
     expect(out.live.map(entry => entry.sessionId))
       .toEqual(['66666666-6666-4666-8666-666666666666'])
     expect(out.warnings.join('\n')).toContain('bad.json')
+  })
+
+  it('degrades gracefully when sessions dir is unreadable, keeping resumable', () => {
+    // Skip this test when running as root, since root ignores directory permissions
+    if (process.getuid?.() === 0) {
+      return
+    }
+
+    const home = fixtureHome({
+      'live.json': {
+        pid: process.pid, sessionId: '77777777-7777-4777-8777-777777777777', cwd: '/tmp',
+      },
+    })
+    writeTranscript(home, '-slug-test', '88888888-8888-4888-8888-888888888888', [
+      { type: 'user', cwd: '/tmp', message: { role: 'user', content: 'test' } },
+    ], 60_000)
+
+    const sessionsDir = join(home, '.claude', 'sessions')
+    chmodSync(sessionsDir, 0o000)
+    try {
+      const out = runProbe(home)
+
+      // Still returns schema 1, exits code 0 (no exception)
+      expect(out.schema).toBe(1)
+      expect(out.live).toEqual([])
+      // Resumable should still have data (other half intact)
+      expect(out.resumable).toHaveLength(1)
+      expect(out.resumable[0]?.sessionId).toBe('88888888-8888-4888-8888-888888888888')
+      // Warning should mention the unreadable sessions directory
+      expect(out.warnings.join('\n')).toContain(sessionsDir)
+    } finally {
+      chmodSync(sessionsDir, 0o755)
+    }
+  })
+
+  it('degrades gracefully when projects dir is unreadable, keeping live', () => {
+    // Skip this test when running as root, since root ignores directory permissions
+    if (process.getuid?.() === 0) {
+      return
+    }
+
+    const home = fixtureHome({
+      'live.json': {
+        pid: process.pid, sessionId: '99999999-9999-4999-8999-999999999999', cwd: '/tmp',
+      },
+    })
+    writeTranscript(home, '-slug-test', '10101010-1010-4101-8101-010101010101', [
+      { type: 'user', cwd: '/tmp', message: { role: 'user', content: 'test' } },
+    ], 60_000)
+
+    const projectsDir = join(home, '.claude', 'projects')
+    chmodSync(projectsDir, 0o000)
+    try {
+      const out = runProbe(home)
+
+      // Still returns schema 1, exits code 0 (no exception)
+      expect(out.schema).toBe(1)
+      // Live should still have data (other half intact)
+      expect(out.live).toHaveLength(1)
+      expect(out.live[0]?.sessionId).toBe('99999999-9999-4999-8999-999999999999')
+      expect(out.resumable).toEqual([])
+      // Warning should mention the unreadable projects directory
+      expect(out.warnings.join('\n')).toContain(projectsDir)
+    } finally {
+      chmodSync(projectsDir, 0o755)
+    }
   })
 })
