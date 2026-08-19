@@ -129,6 +129,74 @@ describe('ClaudeCodeService.open()', () => {
   })
 })
 
+describe('open() and discovery', () => {
+  it('never consults a discovery source for a plain open with an explicit cwd', async () => {
+    // Correct today only because `options.cwd ?? await this.resumeCwd(...)`
+    // short-circuits on the `??` — a regression that called `discover()`
+    // before that check would pass every OTHER existing test here (they all
+    // assert on the result, not on whether discovery ran) while making every
+    // ordinary open fan out over SSH to every registered mesh source.
+    const { service, dispose } = await mount()
+    try {
+      let calls = 0
+      service.registerDiscoverySource({
+        id: 'remote:test',
+        host: 'b2studio',
+        discover: async request => {
+          calls += 1
+          return Promise.resolve({ generatedAt: request.now, cached: false, warnings: [], sessions: [] })
+        },
+      })
+
+      await service.open({ cwd: CWD })
+
+      expect(calls).toBe(0)
+    } finally {
+      await dispose()
+    }
+  })
+
+  it('does consult discovery for a resume that has to resolve its own cwd', async () => {
+    // The counter proven live, not trivially zero: the SAME source that saw
+    // zero calls for a plain open above must see at least one for a resume
+    // that has no cwd to fall back on.
+    const { service, dispose } = await mount()
+    try {
+      let calls = 0
+      const id = 'bbbbbbbb-0000-4000-8000-000000000000' as CcSessionId
+      service.registerDiscoverySource({
+        id: 'remote:test',
+        host: 'b2studio',
+        discover: async (request) => {
+          calls += 1
+          return Promise.resolve({
+            generatedAt: request.now,
+            cached: false,
+            warnings: [],
+            sessions: [{
+              sessionId: id,
+              origin: 'resumable' as const,
+              host: 'b2studio',
+              sourceId: 'remote:test',
+              cwd: CWD,
+              lastActivityAt: request.now - 1_000,
+              sendable: false,
+              resumable: true,
+              fidelity: 'probe' as const,
+            }],
+          })
+        },
+      })
+
+      await service.open({ resume: id, fork: true })
+
+      expect(calls).toBeGreaterThan(0)
+    } finally {
+      await dispose()
+    }
+  })
+})
+
 describe('ClaudeCodeService registry lifecycle', () => {
   it('close(id) closes the subprocess and drops the entry', async () => {
     const { service, fake, dispose } = await mount()

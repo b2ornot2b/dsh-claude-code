@@ -74,7 +74,7 @@ import {
   DISCOVERED_SESSION_ITEM_SCHEMA, projectDiscovered, projectSessions, renderSessionList, renderWideList,
   SESSION_LIST_SCHEMA,
 } from './list.ts'
-import { noSuchSession, openSession, requireSession } from './open.ts'
+import { describeOpenTarget, noSuchSession, openSession, requireSession } from './open.ts'
 import {
   answerInDshUi, PENDING_ASK_DETAILS_SCHEMA, projectPendingAsks, renderPendingAsks, renderStillRunning,
 } from './pending.ts'
@@ -417,7 +417,7 @@ export function apply(ctx: Context, _config: Config = {}): void {
         human_decisions: turnDecisions(opened.session, turnStart),
       }
     },
-    presentCall: args => genericCall(`Open Claude Code session in ${args.cwd}`, args.resume ?? args.cwd),
+    presentCall: args => genericCall(`Open Claude Code session ${describeOpenTarget(args)}`, args.resume ?? args.cwd),
   }))
 
   ctx.tools.register(defineTool({

@@ -207,6 +207,28 @@ function attachSessionMirror(ctx: Context, id: CcSessionId, cwd: string): boolea
 }
 
 /**
+ * Describe WHERE a `claude_code_open` call is rooted, for PRESENTATION only —
+ * the tool-call title and the background job label, never parsed by anything.
+ *
+ * `cwd` is the common case and its wording is unchanged from before `cwd`
+ * became optional. A cwd-less resume (Task 11: the seam fills it in from
+ * discovery) has no directory to show at THIS layer — the caller specified a
+ * SESSION, not a path — so this names that instead of leaving the caller-typed
+ * `undefined` in the label, which making `cwd` optional made reachable.
+ * @param args - the `cwd`/`resume` fields of the open call.
+ * @returns a phrase like `in /repo` or `resuming <id>`, for interpolation into
+ *   a title that already says "Open Claude Code session".
+ */
+export function describeOpenTarget(args: Pick<CcOpenArgs, 'cwd' | 'resume'>): string {
+  if (args.cwd !== undefined) return `in ${args.cwd}`
+  if (args.resume !== undefined) return `resuming ${args.resume}`
+  // Neither given: the seam itself refuses this with INVALID_CWD before
+  // anything spawns. Presentation must still render something truthful for
+  // the instant before that refusal is seen.
+  return 'with no cwd or resume given'
+}
+
+/**
  * Narrow a model-supplied permission mode to the seam's union.
  *
  * The tool schema already declares the enum, so this is belt-and-braces for the

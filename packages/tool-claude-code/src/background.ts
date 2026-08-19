@@ -36,7 +36,7 @@ import type { JobHooks, JobId, JobOutcome } from '@deepseek-ai/dsh-jobs'
 import {
   abortedError, ClaudeCodeToolError, describeError, jobRejectedError, JOBS_REQUIRED_MESSAGE,
 } from './errors.ts'
-import { openSession } from './open.ts'
+import { describeOpenTarget, openSession } from './open.ts'
 import type { CcOpenArgs } from './open.ts'
 import { projectResult } from './result.ts'
 
@@ -72,7 +72,7 @@ export interface CcBackgroundHandle {
  */
 export function jobLabel(args: CcOpenArgs): string {
   const source = args.prompt === undefined || args.prompt.trim().length === 0
-    ? `claude code session in ${args.cwd}`
+    ? `claude code session ${describeOpenTarget(args)}`
     : args.prompt
   const line = source.replace(/\s+/g, ' ').trim()
   return line.length <= MAX_JOB_LABEL_LENGTH
