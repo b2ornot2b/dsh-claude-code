@@ -22,8 +22,17 @@
  * @module @deepseek-ai/dsh-claude-code
  */
 
-import { query as sdkQuery, startup as sdkStartup } from '@anthropic-ai/claude-agent-sdk'
+import { execFile } from 'node:child_process'
+import { readdir, readFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
+import { promisify } from 'node:util'
 
+import {
+  listSessions as sdkListSessions, query as sdkQuery, startup as sdkStartup,
+} from '@anthropic-ai/claude-agent-sdk'
+
+import type { CcRegistryEntry, CcStoreEntry } from './discovery-local.ts'
 import type { CcPermissionMode, CcSettingSource } from './types.ts'
 
 /**
@@ -404,4 +413,143 @@ export const realBackend: QueryBackend = {
       ...(params.initializeTimeoutMs === undefined ? {} : { initializeTimeoutMs: params.initializeTimeoutMs }),
     })
   },
+}
+
+const execFileAsync = promisify(execFile)
+
+/** How long `ps` may take confirming a registry pid's start time before its liveness degrades to `'assumed'`. */
+const PROC_START_CONFIRM_TIMEOUT_MS = 5_000
+
+/**
+ * List this host's resumable sessions from the SDK's own store (design §5.1,
+ * P1): the local read is authoritative — `customTitle`, the SDK's summary
+ * folding — and costs nothing but an in-process scan, so the local discovery
+ * source never shells out to the probe the way a mesh host does.
+ *
+ * This is the second of the two SDK-boundary readers `discovery-local.ts`
+ * consumes through injection; wrapped here because this file is the only
+ * place in the package permitted to import the SDK.
+ *
+ * @param options - `limit` caps how many rows come back.
+ * @returns the store entries, in the SDK's own most-recent-first order.
+ */
+export async function listLocalStore(options: { limit: number }): Promise<CcStoreEntry[]> {
+  const sessions = await sdkListSessions({ limit: options.limit, includeProgrammatic: true })
+  return sessions.map(session => ({
+    sessionId: session.sessionId,
+    summary: session.summary,
+    lastModified: session.lastModified,
+    ...(session.cwd === undefined ? {} : { cwd: session.cwd }),
+    ...(session.customTitle === undefined ? {} : { customTitle: session.customTitle }),
+    ...(session.firstPrompt === undefined ? {} : { firstPrompt: session.firstPrompt }),
+    ...(session.gitBranch === undefined ? {} : { gitBranch: session.gitBranch }),
+    ...(session.createdAt === undefined ? {} : { createdAt: session.createdAt }),
+    ...(session.fileSize === undefined ? {} : { fileSize: session.fileSize }),
+  }))
+}
+
+/**
+ * Whether a pid currently exists. `ESRCH` means it does not; `EPERM` means the
+ * kernel found the process but refused the signal because we do not own it —
+ * which still proves it exists. Any other failure (a non-numeric pid slipping
+ * through, an exotic platform errno) is treated as "does not exist": this
+ * function may only ever be asked to prove liveness, never assume it.
+ * @param pid - the process id to probe.
+ * @returns true when the pid names a live process.
+ */
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+
+/**
+ * Best-effort confirmation that a registry entry's pid is the SAME process
+ * that wrote the file, not a reused one (design P5, §5.2): compare the
+ * `procStart` the file recorded against `ps -o lstart=` for the running pid.
+ * Every failure path — no recorded `procStart`, `ps` missing, a timeout, a
+ * platform that formats `lstart` differently — degrades to `'assumed'`. This
+ * function must never upgrade confidence, only ever hold it back: an
+ * `'assumed'` liveness that turns out fine costs nothing, a `'confirmed'` one
+ * that turns out to be pid reuse reports someone else's session as live.
+ * @param pid - the process id.
+ * @param recordedProcStart - the start-time string the registry file recorded, when present.
+ * @returns `'confirmed'` when the two agree, `'assumed'` otherwise.
+ */
+async function confirmLiveness(
+  pid: number,
+  recordedProcStart: string | undefined,
+): Promise<'confirmed' | 'assumed'> {
+  if (recordedProcStart === undefined) return 'assumed'
+  try {
+    const { stdout } = await execFileAsync(
+      'ps', ['-o', 'lstart=', '-p', String(pid)], { timeout: PROC_START_CONFIRM_TIMEOUT_MS })
+    return stdout.trim() === recordedProcStart ? 'confirmed' : 'assumed'
+  } catch {
+    return 'assumed'
+  }
+}
+
+/** The fields this reader tolerates from one `~/.claude/sessions/<pid>.json` file, all unvalidated. */
+interface RawRegistryFile {
+  readonly pid?: unknown
+  readonly sessionId?: unknown
+  readonly cwd?: unknown
+  readonly name?: unknown
+  readonly kind?: unknown
+  readonly entrypoint?: unknown
+  readonly version?: unknown
+  readonly startedAt?: unknown
+  readonly procStart?: unknown
+}
+
+/**
+ * Read this host's live-session registry (design §5.2): one small JSON file
+ * per process under `$HOME/.claude/sessions/`. Mirrors
+ * `scripts/claude-inventory`'s liveness rule exactly, since that Python probe
+ * is the reference implementation the mesh's remote hosts run: a registry
+ * entry counts as live only when its pid currently exists (P5 — the registry
+ * is known to hold week-old dead entries), and a dead one is dropped outright
+ * rather than reported — the transcript-store reader will still surface it as
+ * `resumable` if it falls inside the recency window.
+ *
+ * @returns live registry entries, one per pid confirmed to still exist.
+ */
+export async function readLocalRegistry(): Promise<CcRegistryEntry[]> {
+  const root = join(homedir(), '.claude', 'sessions')
+  let names: string[]
+  try {
+    names = await readdir(root)
+  } catch {
+    return []
+  }
+
+  const entries: CcRegistryEntry[] = []
+  for (const name of names) {
+    if (!name.endsWith('.json')) continue
+    let raw: RawRegistryFile
+    try {
+      raw = JSON.parse(await readFile(join(root, name), 'utf8')) as RawRegistryFile
+    } catch {
+      continue
+    }
+    if (typeof raw.pid !== 'number' || typeof raw.sessionId !== 'string') continue
+    if (!pidAlive(raw.pid)) continue
+    const procStart = typeof raw.procStart === 'string' ? raw.procStart : undefined
+    entries.push({
+      sessionId: raw.sessionId,
+      pid: raw.pid,
+      cwd: typeof raw.cwd === 'string' ? raw.cwd : '',
+      liveness: await confirmLiveness(raw.pid, procStart),
+      ...(typeof raw.name === 'string' ? { name: raw.name } : {}),
+      ...(typeof raw.kind === 'string' ? { kind: raw.kind } : {}),
+      ...(typeof raw.entrypoint === 'string' ? { entrypoint: raw.entrypoint } : {}),
+      ...(typeof raw.version === 'string' ? { version: raw.version } : {}),
+      ...(typeof raw.startedAt === 'number' ? { startedAt: raw.startedAt } : {}),
+    })
+  }
+  return entries
 }

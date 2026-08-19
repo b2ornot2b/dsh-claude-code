@@ -20,10 +20,12 @@ import type { Session as DshSession } from '@deepseek-ai/dsh-session'
 import { CcAskRouter } from './ask/router.ts'
 import { CcAskRules } from './ask/rules.ts'
 import type { CcAskServices, CcAskTarget } from './ask/types.ts'
-import { realBackend } from './backend.ts'
+import { listLocalStore, readLocalRegistry, realBackend } from './backend.ts'
 import type { CcCanUseTool, QueryBackend } from './backend.ts'
 import { Config as ConfigSchema, resolveClaudeCodeConfig } from './config.ts'
 import type { ClaudeCodeConfig, ResolvedClaudeCodeConfig } from './config.ts'
+import { createLocalSource } from './discovery-local.ts'
+import { mergeDiscovered, normalizeSourceClock, projectComposed } from './discovery.ts'
 import { formatDuration, isReapable, selectReapable, sessionLimitError } from './inventory.ts'
 import { attachMirror } from './mirror.ts'
 import type { CcMirrorHandle, CcMirrorOptions } from './mirror.ts'
@@ -32,8 +34,9 @@ import { CcSession, resolveQueryOptions } from './session.ts'
 import type { CcSessionDeps } from './session.ts'
 import { ClaudeCodeError, newCcSessionId } from './types.ts'
 import type {
-  CcAccountInfo, CcCloseReason, CcContextUsage, CcDiscoverOptions, CcDiscoveryResult, CcDiscoverySource,
-  CcListOptions, CcLogger, CcOpenOptions, CcSessionId, CcSessionSnapshot, CcSessionStatus, ClaudeCode,
+  CcAccountInfo, CcCloseReason, CcContextUsage, CcDiscoveredSession, CcDiscoverOptions, CcDiscoverRequest,
+  CcDiscoveryResult, CcDiscoverySource, CcListOptions, CcLogger, CcOpenOptions, CcSessionId, CcSessionSnapshot,
+  CcSessionStatus, ClaudeCode,
 } from './types.ts'
 
 declare module '@deepseek-ai/cordis' {
@@ -100,6 +103,18 @@ export interface ClaudeCodeServiceDeps {
   readonly resolveApiKey?: () => Promise<string | undefined>
   /** Drain-loop poll interval handed to each session (tests shrink it). */
   readonly drainPollMs?: number
+  /**
+   * Skip wiring the real local discovery source (the SDK store + on-disk
+   * registry). Defaults to wiring it whenever `config.discovery.local` is
+   * true; unit tests pass `false` so nothing here ever touches `~/.claude`.
+   */
+  readonly wireLocalSource?: boolean
+  /**
+   * Replace the local discovery source outright, instead of the real one
+   * `backend.ts` builds from `listLocalStore`/`readLocalRegistry`. Ignored
+   * when `wireLocalSource` is `false`.
+   */
+  readonly localSource?: CcDiscoverySource
 }
 
 /**
@@ -143,6 +158,20 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
 
   /** Diagnostics sink handed to every session (subprocess stderr lands here). */
   private readonly log: CcLogger
+
+  /** Registered discovery sources, keyed by id (a duplicate id replaces its predecessor). */
+  private readonly discoverySources = new Map<string, CcDiscoverySource>()
+
+  /**
+   * The last merged wide-scope result, for `config.discovery.cacheTtlMs`.
+   *
+   * Holds ONLY the external (`live-external`/`resumable`) sessions, never the
+   * composed ones: composed sessions are re-projected fresh on every
+   * {@link ClaudeCodeService.discover} call regardless of cache state, because
+   * they are free (no source to query) and change fastest — a cached one could
+   * name a session that has since closed.
+   */
+  private discoveryCache: { at: number, result: CcDiscoveryResult } | undefined
 
   /**
    * @param ctx - the context that owns the service; disposal closes every session.
@@ -194,6 +223,20 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
           clearInterval(timer)
         }
       }, 'claudeCode:idleSweep')
+    }
+
+    // The real local source reads the SDK store and the on-disk registry
+    // (`backend.ts`, the only place in this package permitted to touch the
+    // SDK). Unit tests pass `wireLocalSource: false` and register their own
+    // fakes instead, so no unit test in this repo ever reads this machine's
+    // real `~/.claude`.
+    if (deps.wireLocalSource !== false && this.config.discovery.local) {
+      const source = deps.localSource ?? createLocalSource({
+        host: this.config.hostLabel,
+        listSessions: async options => listLocalStore(options),
+        readRegistry: async () => readLocalRegistry(),
+      })
+      ctx.effect(() => this.registerDiscoverySource(source), 'claudeCode:localDiscovery')
     }
   }
 
@@ -470,30 +513,95 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
   /**
    * Every session this composition can see, from every registered source.
    *
-   * Stubbed here: session discovery (spec §3, §6.1, §6.4) lands as its own
-   * task — this declares the vocabulary the interface commits to, not the
-   * coordinator that merges sources, dedupes, and normalizes clocks.
+   * `scope: 'composition'` (the default) touches NO source at all — it only
+   * projects this composition's own `list()` — so every caller that predates
+   * discovery, and every caller that never asked for it, pays nothing beyond
+   * the inventory projection it already paid for `SESSION_LIMIT` (spec §6.2).
+   *
+   * Wider scopes query the registered sources IN PARALLEL against a shared
+   * clock reading and never reject: a source that throws or times out becomes
+   * a `warnings` entry instead, because a list that fails whenever one laptop
+   * is asleep is not a list anyone can use (design P6). The composed group is
+   * re-projected fresh on every call, cached or not — it is free (no source to
+   * query) and it is the group that goes stale fastest, so caching it would
+   * risk naming a session that has since closed.
+   *
    * @param options - scope and cache control.
-   * @returns never — always throws.
-   * @throws {ClaudeCodeError} code `NOT_IMPLEMENTED`.
+   * @returns the merged, deduped, clock-normalized inventory.
    */
-  async discover(options?: CcDiscoverOptions): Promise<CcDiscoveryResult> {
-    void options
-    throw new ClaudeCodeError('claude-code: discover() is not implemented yet', 'NOT_IMPLEMENTED')
+  async discover(options: CcDiscoverOptions = {}): Promise<CcDiscoveryResult> {
+    const now = Date.now()
+    const scope = options.scope ?? 'composition'
+    const composed = projectComposed(this.list(), this.config.hostLabel, now)
+    if (scope === 'composition') {
+      return { sessions: composed, warnings: [], generatedAt: now, cached: false }
+    }
+
+    const cached = this.discoveryCache
+    if (options.refresh !== true && cached !== undefined
+      && now - cached.at < this.config.discovery.cacheTtlMs) {
+      // Routed through the SAME merge the uncached path uses (Amendment 2):
+      // a session that is both composed and reported live by an external
+      // source must dedupe here too, or it would appear twice on every cache
+      // hit even though the uncached path never lets that happen.
+      return {
+        ...cached.result,
+        sessions: mergeDiscovered(composed, [[...cached.result.sessions]], now),
+        cached: true,
+      }
+    }
+
+    const sources = [...this.discoverySources.values()]
+      .filter(source => scope === 'mesh' || source.host === this.config.hostLabel)
+    const request: CcDiscoverRequest = {
+      now,
+      includeResumable: options.includeResumable ?? true,
+      recentWindowMs: this.config.discovery.recentWindowMs,
+      maxResumable: this.config.discovery.maxResumable,
+      includeTitles: this.config.discovery.includeTitles,
+    }
+    const warnings: string[] = []
+    const groups = await Promise.all(sources.map(async (source): Promise<CcDiscoveredSession[]> => {
+      try {
+        return normalizeSourceClock(await source.discover(request), now)
+      } catch (error) {
+        warnings.push(`${source.host}: ${error instanceof Error ? error.message : String(error)}`)
+        return []
+      }
+    }))
+
+    // The cache stores ONLY the external sessions (never `composed`): they are
+    // what cost something to gather, and re-merging them against a freshly
+    // projected `composed` on the next call is how a closed composed session
+    // stops shadowing a cached external copy of itself.
+    const external = mergeDiscovered([], groups, now)
+    this.discoveryCache = {
+      at: now,
+      result: { sessions: external, warnings, generatedAt: now, cached: false },
+    }
+    return {
+      sessions: mergeDiscovered(composed, [external], now),
+      warnings,
+      generatedAt: now,
+      cached: false,
+    }
   }
 
   /**
-   * Contribute sessions from outside this composition.
+   * Contribute sessions from outside this composition (spec §6.1): a mesh
+   * host's probe, a container's forwarded inventory, or a test double.
    *
-   * Stubbed alongside {@link ClaudeCodeService.discover} for the same reason.
-   * @param source - the source to add.
-   * @returns never — always throws.
-   * @throws {ClaudeCodeError} code `NOT_IMPLEMENTED`.
+   * @param source - the source to add; a duplicate id replaces its predecessor.
+   * @returns a disposer that removes it and drops the cache, so the next
+   *   {@link ClaudeCodeService.discover} call never consults it again.
    */
   registerDiscoverySource(source: CcDiscoverySource): () => void {
-    void source
-    throw new ClaudeCodeError(
-      'claude-code: registerDiscoverySource() is not implemented yet', 'NOT_IMPLEMENTED')
+    this.discoverySources.set(source.id, source)
+    this.discoveryCache = undefined
+    return () => {
+      this.discoverySources.delete(source.id)
+      this.discoveryCache = undefined
+    }
   }
 
   /**
