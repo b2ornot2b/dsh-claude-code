@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  // Type-checks every package's specs (and this repo's own config files) in one
+  // pass, against package SOURCES through the tsconfig.base.json paths map —
+  // the same resolution vitest uses. Emits nothing: package tsconfigs own the
+  // build.
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "types": ["node"]
+  },
+  "include": ["packages/*/tests/**/*.ts", "tests/**/*.ts", "examples/**/*.ts", "vitest.config.ts"]
+}

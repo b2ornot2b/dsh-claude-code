@@ -1,0 +1,43 @@
+# The SAME composition as `cordis.yml`, minus the jobs runtime.
+#
+# A jobs-less deployment is supported, not degraded: `@deepseek-ai/dsh-jobs` is
+# a PEER dependency of `@deepseek-ai/dsh-tool-claude-code` and the plugin's
+# `inject` list never names it, so all seven tools must mount and work here — only
+# `claude_code_open({ background: true })` is unavailable, and it must say so in
+# words that name what to load rather than crashing on an undefined service.
+#
+# Keeping it as a second file (rather than toggling rows in the first) is what
+# makes the Loader do the work: this is a genuinely different `import()` set.
+
+# --- published dsh services this integration depends on ----------------------
+- id: sessions
+  name: '@deepseek-ai/dsh-session'
+
+- id: agents
+  name: '@deepseek-ai/dsh-agent'
+
+- id: system-prompt
+  name: '@deepseek-ai/dsh-system-prompt'
+
+- id: tools
+  name: '@deepseek-ai/dsh-tools'
+
+# --- this integration, with NO jobs rows -------------------------------------
+- id: claude-code
+  name: '@deepseek-ai/dsh-claude-code'
+  config:
+    prewarm: false
+    defaults:
+      permissionMode: acceptEdits
+      settingSources: []
+    ask:
+      fallback: deny
+      persistAlwaysAllow: false
+    limits:
+      maxConcurrentSessions: 2
+
+- id: tool-claude-code
+  name: '@deepseek-ai/dsh-tool-claude-code'
+
+- id: claude-code-agent
+  name: '@deepseek-ai/dsh-claude-code-agent'

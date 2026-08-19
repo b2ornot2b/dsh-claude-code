@@ -1,0 +1,286 @@
+import type { CcSessionId, CcSessionSnapshot } from '@deepseek-ai/dsh-claude-code'
+import { describe, expect, it } from 'vitest'
+
+import { EMPTY_SESSION_LIST, projectSessions, renderSessionList } from '../src/list.ts'
+import type { CcSessionListEntry } from '../src/list.ts'
+
+import { CWD, mountTools, settle } from './harness.ts'
+
+/**
+ * `claude_code_list` — the seventh tool.
+ *
+ * It exists because every other tool here takes a `session_id`, so the only
+ * sessions a model could reach were the ones it had personally opened and still
+ * remembered — while `limits.maxConcurrentSessions` is enforced across the whole
+ * host service, which outlives any one dsh session. In the trace that motivated
+ * it, an agent was refused a slot three times by sessions it could not name.
+ */
+
+/**
+ * The rendered text of a tool result.
+ * @param result - the execution result.
+ * @returns the first content block's text.
+ */
+function text(result: { content: unknown[] }): string {
+  return String((result.content[0] as { text?: unknown }).text ?? '')
+}
+
+describe('claude_code_list with nothing open', () => {
+  it('returns an empty array and SAYS the list is empty', async () => {
+    const harness = await mountTools()
+    try {
+      const result = await harness.call('claude_code_list', {})
+
+      expect(result.isError).toBe(false)
+      expect(result.value).toEqual({ sessions: [] })
+      // "No sessions" and "I could not parse this" must never look alike.
+      expect(text(result)).toBe(EMPTY_SESSION_LIST)
+      expect(text(result)).toContain('claude_code_open')
+    } finally {
+      await harness.dispose()
+    }
+  })
+
+  it('takes no required arguments', async () => {
+    const harness = await mountTools()
+    try {
+      const definition = harness.ctx.tools.get('claude_code_list')
+      const parameters = JSON.parse(JSON.stringify(definition?.parameters)) as { required?: string[] }
+
+      expect(parameters.required ?? []).toEqual([])
+    } finally {
+      await harness.dispose()
+    }
+  })
+})
+
+describe('claude_code_list with one session', () => {
+  it('reports its id, cwd, status, age and (empty) pending asks', async () => {
+    const harness = await mountTools()
+    try {
+      const opened = await harness.call('claude_code_open', { cwd: CWD })
+      const sessionId = (opened.value as { session_id: string }).session_id
+
+      const result = await harness.call('claude_code_list', {})
+      const { sessions } = result.value as unknown as { sessions: CcSessionListEntry[] }
+
+      expect(sessions).toHaveLength(1)
+      expect(sessions[0]).toMatchObject({
+        session_id: sessionId,
+        status: 'idle',
+        cwd: CWD,
+        pending_asks: 0,
+        pending_ask_details: [],
+      })
+      expect(sessions[0]?.age_ms).toBeGreaterThanOrEqual(0)
+      // A live session carries no close reason.
+      expect('close_reason' in (sessions[0] ?? {})).toBe(false)
+
+      const rendered = text(result)
+      expect(rendered).toContain('1 Claude Code session(s)')
+      expect(rendered).toContain(sessionId)
+      expect(rendered).toContain(CWD)
+      // The fact the production agent could not deduce.
+      expect(rendered).toContain('OTHER dsh sessions sharing this host service')
+    } finally {
+      await harness.dispose()
+    }
+  })
+})
+
+describe('claude_code_list with several sessions', () => {
+  it('lists them all, best close candidate first', async () => {
+    const harness = await mountTools()
+    try {
+      const opens = []
+      for (let index = 0; index < 3; index += 1) {
+        opens.push(await harness.call('claude_code_open', { cwd: CWD }))
+      }
+      const ids = opens.map(result => (result.value as { session_id: string }).session_id)
+      // The third one is given a turn to run — `claude_code_send` returns as soon
+      // as the message is queued, so nothing here waits on a result the fake
+      // backend will never produce on its own.
+      await harness.call('claude_code_send', { session_id: ids[2], message: 'a long job', mode: 'followup' })
+      await settle()
+      const result = await harness.call('claude_code_list', {})
+      const { sessions } = result.value as unknown as { sessions: CcSessionListEntry[] }
+
+      expect(sessions).toHaveLength(3)
+      expect(sessions.map(entry => entry.session_id).sort()).toEqual([...ids].sort())
+      // The session with a turn in flight sorts LAST: closing it kills work.
+      expect(sessions.at(-1)?.session_id).toBe(ids[2])
+      expect(sessions.at(-1)?.status).toBe('running')
+    } finally {
+      await harness.dispose()
+    }
+  })
+})
+
+describe('include_closed', () => {
+  it('omits closed sessions by default — only live ones hold a slot', async () => {
+    const harness = await mountTools()
+    try {
+      const opened = await harness.call('claude_code_open', { cwd: CWD })
+      const sessionId = (opened.value as { session_id: string }).session_id
+      await harness.call('claude_code_close', { session_id: sessionId })
+
+      const result = await harness.call('claude_code_list', {})
+
+      expect(result.value).toEqual({ sessions: [] })
+      expect(text(result)).toBe(EMPTY_SESSION_LIST)
+    } finally {
+      await harness.dispose()
+    }
+  })
+
+  it('includes them, with why each one ended, when asked', async () => {
+    const harness = await mountTools()
+    try {
+      const opened = await harness.call('claude_code_open', { cwd: CWD })
+      const sessionId = (opened.value as { session_id: string }).session_id
+      await harness.call('claude_code_close', { session_id: sessionId })
+
+      const result = await harness.call('claude_code_list', { include_closed: true })
+      const { sessions } = result.value as unknown as { sessions: CcSessionListEntry[] }
+
+      expect(sessions).toHaveLength(1)
+      expect(sessions[0]).toMatchObject({
+        session_id: sessionId,
+        status: 'closed',
+        close_reason: 'closed',
+        cwd: CWD,
+      })
+      expect(text(result)).toContain('0 live, 1 recently closed')
+    } finally {
+      await harness.dispose()
+    }
+  })
+
+  it('reports a session the idle sweep reclaimed as "reaped", not as one somebody closed', async () => {
+    const harness = await mountTools()
+    try {
+      const opened = await harness.call('claude_code_open', { cwd: CWD })
+      const sessionId = (opened.value as { session_id: string }).session_id
+      // Exactly what the sweep does; driving the timer belongs to the seam's own
+      // specs, the tool contract under test here is that the reason survives.
+      await harness.ctx.claudeCode.close(sessionId as CcSessionId, 'reaped')
+
+      const listed = await harness.call('claude_code_list', { include_closed: true })
+      expect((listed.value as unknown as { sessions: CcSessionListEntry[] }).sessions[0]?.close_reason).toBe('reaped')
+
+      // …and the status tool, which is where a caller whose session vanished
+      // actually looks, accepts the new reason through its enum.
+      const status = await harness.call('claude_code_status', { session_id: sessionId })
+      expect(status.isError).toBe(false)
+      expect(status.value).toMatchObject({ status: 'closed', close_reason: 'reaped' })
+      expect(text(status)).toContain('(reaped)')
+    } finally {
+      await harness.dispose()
+    }
+  })
+
+  it('does not show a resumed session as both live and closed', async () => {
+    // A plain resume continues under the SAME id it resumes, so the id holds a
+    // live record AND a tombstone. Two rows for one session — one of them saying
+    // `closed` — is worse than no listing: a model reading the corpse would open
+    // a replacement for a session that is sitting right there.
+    const harness = await mountTools()
+    try {
+      const opened = await harness.call('claude_code_open', { cwd: CWD })
+      const sessionId = (opened.value as { session_id: string }).session_id
+      await harness.call('claude_code_close', { session_id: sessionId })
+      const resumed = await harness.call('claude_code_open', { cwd: CWD, resume: sessionId })
+      expect((resumed.value as { session_id: string }).session_id).toBe(sessionId)
+
+      const result = await harness.call('claude_code_list', { include_closed: true })
+      const { sessions } = result.value as unknown as { sessions: CcSessionListEntry[] }
+
+      expect(sessions).toHaveLength(1)
+      expect(sessions[0]?.status).not.toBe('closed')
+      expect(sessions[0]?.close_reason).toBeUndefined()
+      expect(text(result)).toContain('1 live, 0 recently closed')
+    } finally {
+      await harness.dispose()
+    }
+  })
+})
+
+describe('the listing prose', () => {
+  /**
+   * One projected entry.
+   * @param overrides - what the case is about.
+   * @returns the entry.
+   */
+  function entry(overrides: Partial<CcSessionListEntry> = {}): CcSessionListEntry {
+    return {
+      session_id: 'session-a',
+      status: 'idle',
+      cwd: '/repo/api',
+      age_ms: 900_000,
+      pending_asks: 0,
+      pending_ask_details: [],
+      human_decisions_count: 0,
+      ...overrides,
+    }
+  }
+
+  it('names the tool a human is deciding, and says not to close that session', () => {
+    const rendered = renderSessionList([
+      entry(),
+      entry({
+        session_id: 'session-b',
+        cwd: '/repo/web',
+        pending_asks: 1,
+        pending_ask_details: [{ kind: 'permission', tool_name: 'Write', reason: 'Write: /tmp/notes.txt', waiting_ms: 5_520_000 }],
+      }),
+    ], false)
+
+    expect(rendered).toContain('2 Claude Code session(s)')
+    expect(rendered).toContain('/repo/api')
+    expect(rendered).toContain('permission ask for tool "Write"')
+    expect(rendered).toContain('reason: Write: /tmp/notes.txt')
+    expect(rendered).toContain('1h 32m')
+    expect(rendered).toContain('1 session(s) are BLOCKED')
+    expect(rendered).toContain('do not close those')
+  })
+
+  it('renders the empty case as prose, never as an empty table', () => {
+    expect(renderSessionList([], false)).toBe(EMPTY_SESSION_LIST)
+    expect(renderSessionList([], true)).toBe(EMPTY_SESSION_LIST)
+  })
+})
+
+describe('projectSessions', () => {
+  it('measures every age against ONE clock reading', () => {
+    const now = 1_700_000_000_000
+    const sessions = projectSessions([
+      {
+        id: 'a' as CcSessionId,
+        status: 'idle',
+        cwd: '/repo/api',
+        openedAt: now - 120_000,
+        lastActivityAt: now - 120_000,
+        pendingAsks: 0,
+        pendingAskDetails: [],
+        recentAsks: [],
+      },
+    ], now)
+
+    expect(sessions[0]?.age_ms).toBe(120_000)
+  })
+
+  it('projects a snapshot from a seam older than these fields instead of throwing', () => {
+    // This package and the seam are published and RESOLVED separately, so a
+    // deployment can run a tool newer than the service behind it. A listing that
+    // throws is strictly worse than a listing that says less.
+    const skewed = { id: 'skewed', status: 'idle', pendingAsks: 0 } as unknown as CcSessionSnapshot
+
+    const sessions = projectSessions([skewed], 1_700_000_000_000)
+
+    expect(sessions).toHaveLength(1)
+    expect(sessions[0]?.pending_ask_details).toEqual([])
+    expect(sessions[0]?.age_ms).toBe(0)
+    expect(() => renderSessionList(sessions, false)).not.toThrow()
+    expect(renderSessionList(sessions, false)).not.toContain('NaN')
+  })
+})

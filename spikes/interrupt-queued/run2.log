@@ -1,0 +1,8 @@
+UUIDS> {"uuid1":"b0150802-5073-46d3-bc86-5e0ea7321fe9","uuid2":"017ddf23-dd64-4c79-8afa-9392574b09e0","uuid3":"a6235c68-ab57-43a1-a64c-0a9b15d387e3"}
+INIT capabilities: ["interrupt_receipt_v1","interrupt_cancel_queued_v1","msg_lifecycle_v1"]
+INTERRUPT RESULT> {"still_queued":["017ddf23-dd64-4c79-8afa-9392574b09e0","a6235c68-ab57-43a1-a64c-0a9b15d387e3"]}
+RESULT #1> subtype=error_during_execution text=
+INIT capabilities: ["interrupt_receipt_v1","interrupt_cancel_queued_v1","msg_lifecycle_v1"]
+RESULT #2> subtype=success text=APPLE.
+PEAR.
+SUMMARY> {"sawInit":true,"interruptResult":{"still_queued":["017ddf23-dd64-4c79-8afa-9392574b09e0","a6235c68-ab57-43a1-a64c-0a9b15d387e3"]},"resultCount":2}
