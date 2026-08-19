@@ -102,6 +102,14 @@ export {
   sessionLimitError,
 } from './inventory.ts'
 
+export {
+  groupByOrigin,
+  mergeDiscovered,
+  normalizeSourceClock,
+  ORIGIN_PRECEDENCE,
+  projectComposed,
+} from './discovery.ts'
+
 export { createInputStream } from './input-stream.ts'
 export type { CcInputStream, CcUserMessageInit } from './input-stream.ts'
 
