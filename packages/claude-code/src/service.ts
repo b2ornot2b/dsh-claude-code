@@ -583,10 +583,16 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
    * Wider scopes query the registered sources IN PARALLEL against a shared
    * clock reading and never reject: a source that throws or times out becomes
    * a `warnings` entry instead, because a list that fails whenever one laptop
-   * is asleep is not a list anyone can use (design P6). The composed group is
-   * re-projected fresh on every call, cached or not — it is free (no source to
-   * query) and it is the group that goes stale fastest, so caching it would
-   * risk naming a session that has since closed.
+   * is asleep is not a list anyone can use (design P6). A source's OWN
+   * `warnings` — the ordinary, successful-resolution way of reporting "I could
+   * not look" — carry the same weight and are surfaced the same way: sources
+   * are built never to throw, so a thrown error is the exceptional case and a
+   * resolved `warnings` entry is the normal one. Every warning, from either
+   * path, is collected in `sources` order so the same mesh state renders
+   * identically between calls regardless of which source answers first. The
+   * composed group is re-projected fresh on every call, cached or not — it is
+   * free (no source to query) and it is the group that goes stale fastest, so
+   * caching it would risk naming a session that has since closed.
    *
    * @param options - scope and cache control.
    * @returns the merged, deduped, clock-normalized inventory.
@@ -628,18 +634,36 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
       includeTitles: this.config.discovery.includeTitles,
     }
     const sourceTimeoutMs = this.config.discovery.sourceTimeoutMs
-    const warnings: string[] = []
     // One deadline PER SOURCE, inside this parallel map — never around the
     // whole `Promise.all` — so one hung host cannot delay the others' results.
-    const groups = await Promise.all(sources.map(async (source): Promise<CcDiscoveredSession[]> => {
+    //
+    // Each callback returns its OWN warnings instead of pushing into a shared
+    // array: a source's contract is that it never throws, it reports failure
+    // IN `result.warnings` (`{ sessions: [], warnings: ['b2mini: ssh timeout'] }`
+    // is a normal, successful resolution) — so a resolved source's warnings
+    // matter at least as much as a thrown one's, and dropping them made
+    // "nothing running" and "could not look" read identically. Returning them
+    // through the mapped array also gets determinism for free: `Promise.all`
+    // reports its results in the ORDER OF `sources`, regardless of which
+    // source settles first, whereas pushing into a shared array from inside
+    // concurrent callbacks appends in completion order — the same mesh state
+    // would then render its warnings in a different order on every call.
+    const settled = await Promise.all(sources.map(async (source): Promise<{
+      sessions: CcDiscoveredSession[]
+      warnings: readonly string[]
+    }> => {
       try {
         const result = await this.queryWithDeadline(source, request, sourceTimeoutMs)
-        return normalizeSourceClock(result, now)
+        return { sessions: normalizeSourceClock(result, now), warnings: result.warnings }
       } catch (error) {
-        warnings.push(`${source.host}: ${error instanceof Error ? error.message : String(error)}`)
-        return []
+        return {
+          sessions: [],
+          warnings: [`${source.host}: ${error instanceof Error ? error.message : String(error)}`],
+        }
       }
     }))
+    const groups = settled.map(entry => entry.sessions)
+    const warnings = settled.flatMap(entry => entry.warnings)
 
     // The cache stores ONLY the external sessions (never `composed`): they are
     // what cost something to gather, and re-merging them against a freshly
