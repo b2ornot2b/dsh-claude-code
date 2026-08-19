@@ -257,14 +257,19 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
    *
    * @param options - working directory, first prompt, model, permission mode, resume/fork.
    * @returns the new session's snapshot, taken after the initialize handshake.
-   * @throws {ClaudeCodeError} code `INVALID_CWD` when `cwd` is not an existing
+   * @throws {ClaudeCodeError} code `INVALID_CWD` when `cwd` is omitted without
+   *   `resume`, or when the given (or discovered) cwd is not an existing
    *   absolute directory (checked BEFORE anything spawns), `SESSION_LIMIT` when
    *   `limits.maxConcurrentSessions` is already reached, `SESSION_EXISTS` when a
    *   plain resume targets a session that is still open here, or `BACKEND_ERROR`
    *   when the SDK fails to start the session.
    */
   async open(options: CcOpenOptions): Promise<CcSessionSnapshot> {
-    assertUsableCwd(options.cwd)
+    // A resumed session already has a working directory; making the caller
+    // restate it invites a wrong guess, and a wrong cwd is the failure mode
+    // that wrote proof.txt into $HOME instead of the repo.
+    const cwd = options.cwd ?? await this.resumeCwd(options.resume)
+    assertUsableCwd(cwd)
     const limit = this.config.limits.maxConcurrentSessions
     if (this.sessions.size >= limit) {
       // The refusal INVENTORIES what is holding the slots — see `inventory.ts`
@@ -290,7 +295,7 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
     // handle is therefore always a PLAIN session of this shape: the equality key
     // for `acquire()` and the recipe for the next `prewarm()`, both.
     const poolShape = {
-      cwd: options.cwd,
+      cwd,
       ...(options.model === undefined ? {} : { model: options.model }),
       ...(options.permissionMode === undefined ? {} : { permissionMode: options.permissionMode }),
     }
@@ -320,7 +325,7 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
     const router = new CcAskRouter({
       services: this.askServices(),
       config: this.config,
-      rules: CcAskRules.forSession(this.config, options.cwd, this.log),
+      rules: CcAskRules.forSession(this.config, cwd, this.log),
       logger: this.log,
     })
     const session = new CcSession(
@@ -332,7 +337,7 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
 
     const record: CcSessionRecord = {
       id,
-      cwd: options.cwd,
+      cwd,
       openedAt: Date.now(),
       status: 'starting',
       pendingAsks: 0,
@@ -375,6 +380,32 @@ export class ClaudeCodeService extends Service implements ClaudeCode {
     void this.pool.prewarm(template)
 
     return session.snapshot()
+  }
+
+  /**
+   * Find the working directory of a session being resumed.
+   *
+   * Consults the cache the same as any other `scope: 'mesh'` discovery call —
+   * never `refresh: true` — so a resume never forces a fresh probe of every
+   * mesh host on top of the one discovery already ran to list this session.
+   * @param resume - the session id to resume, if any.
+   * @returns the discovered cwd.
+   * @throws {ClaudeCodeError} code `INVALID_CWD` when there is no `resume` to
+   *   resolve from, or when discovery does not know the resumed session's cwd.
+   */
+  private async resumeCwd(resume: CcSessionId | undefined): Promise<string> {
+    if (resume === undefined) {
+      throw new ClaudeCodeError('claude-code: open requires a cwd unless resume is set', 'INVALID_CWD')
+    }
+    const found = (await this.discover({ scope: 'mesh' })).sessions
+      .find(session => session.sessionId === resume)
+    if (found === undefined || found.cwd === '') {
+      throw new ClaudeCodeError(
+        `claude-code: cannot resume ${resume}: no cwd was given and discovery does not know this session. `
+        + 'Pass cwd explicitly, or call claude_code_list with a wider scope first.',
+        'INVALID_CWD')
+    }
+    return found.cwd
   }
 
   /**

@@ -32,8 +32,11 @@ import { ClaudeCodeToolError } from './errors.ts'
 
 /** The `claude_code_open` arguments this module consumes, in the tool's own snake_case. */
 export interface CcOpenArgs {
-  /** Absolute working directory the session runs in. */
-  readonly cwd: string
+  /**
+   * Absolute working directory the session runs in. Required unless `resume`
+   * is set, in which case the seam resolves it from discovery.
+   */
+  readonly cwd?: string | undefined
   /** First user message; omitted opens an idle session. */
   readonly prompt?: string | undefined
   /** Model id override. */
@@ -79,7 +82,7 @@ export async function openSession(
   const ask = resolveAskTarget(ctx, exec)
   const permissionMode = readPermissionMode(args.permission_mode)
   const options: CcOpenOptions = {
-    cwd: args.cwd,
+    ...(args.cwd === undefined ? {} : { cwd: args.cwd }),
     ...(args.model === undefined ? {} : { model: args.model }),
     ...(permissionMode === undefined ? {} : { permissionMode }),
     ...(args.resume === undefined ? {} : { resume: args.resume as CcSessionId }),
@@ -97,9 +100,12 @@ export async function openSession(
     throw noSuchSession(id)
   }
 
+  // The RESOLVED cwd, not `args.cwd`: a resume without one gets it from
+  // discovery inside `open()`, and the mirror header must record what the
+  // session actually runs in, not what the caller omitted.
   let mirrored = false
   try {
-    mirrored = attachSessionMirror(ctx, id, args.cwd)
+    mirrored = attachSessionMirror(ctx, id, snapshot.cwd)
   } catch (error) {
     // A mirror that cannot be attached is a composition bug, not a reason to
     // strand a live subprocess holding a permission callback.

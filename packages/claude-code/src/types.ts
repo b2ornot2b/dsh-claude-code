@@ -203,8 +203,15 @@ export interface CcMirrorAttachment extends CcMirrorOptions {
 
 /** How to open (or resume, or fork) a Claude Code session. */
 export interface CcOpenOptions {
-  /** Absolute working directory the session runs in. Required. */
-  readonly cwd: string
+  /**
+   * Absolute working directory the session runs in. Required, UNLESS `resume`
+   * is set: a resumed session already has one, and the seam resolves it from
+   * discovery rather than trust a caller to restate it — a wrong guess here is
+   * the failure mode that once wrote a file into `$HOME` instead of the repo
+   * (Claude Code resolves a relative path against `$HOME`, not the cwd it was
+   * handed).
+   */
+  readonly cwd?: string
   /** First user message. Omit to open an idle session and send later. */
   readonly prompt?: string
   /** Model id; omitted means the CLI default (or `defaults.model` from config). */

@@ -398,3 +398,49 @@ describe('ClaudeCodeService warm pool integration', () => {
     }
   })
 })
+
+describe('resume without an explicit cwd', () => {
+  it('fills the cwd from discovery', async () => {
+    const { service, fake, dispose } = await mount()
+    try {
+      const id = '77777777-7777-4777-8777-777777777777' as CcSessionId
+      service.registerDiscoverySource({
+        id: 'remote:test',
+        host: 'b2studio',
+        discover: async request => Promise.resolve({
+          generatedAt: request.now,
+          cached: false,
+          warnings: [],
+          sessions: [{
+            sessionId: id,
+            origin: 'resumable' as const,
+            host: 'b2studio',
+            sourceId: 'remote:test',
+            cwd: '/Users/b2/Developer/mine/b2infra',
+            lastActivityAt: request.now - 1_000,
+            sendable: false,
+            resumable: true,
+            fidelity: 'probe' as const,
+          }],
+        }),
+      })
+
+      await service.open({ resume: id, fork: true })
+
+      expect(fake.queries[0]?.options.cwd).toBe('/Users/b2/Developer/mine/b2infra')
+    } finally {
+      await dispose()
+    }
+  })
+
+  it('refuses with INVALID_CWD when discovery cannot name the session', async () => {
+    const { service, dispose } = await mount()
+    try {
+      await expect(service.open({
+        resume: '88888888-8888-4888-8888-888888888888' as CcSessionId, fork: true,
+      })).rejects.toMatchObject({ code: 'INVALID_CWD' })
+    } finally {
+      await dispose()
+    }
+  })
+})

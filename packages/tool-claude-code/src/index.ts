@@ -285,12 +285,17 @@ export function apply(ctx: Context, _config: Config = {}): void {
   ctx.tools.register(defineTool({
     name: 'claude_code_open',
     description: 'Open a new Claude Code session, or resume (optionally fork) an existing one, rooted at a working '
-      + 'directory. With `prompt`, waits for that first turn and returns its answer; omit `prompt` to open idle and '
+      + 'directory. `cwd` is required unless `resume` is set, in which case the session\'s own working directory '
+      + 'is used. With `prompt`, waits for that first turn and returns its answer; omit `prompt` to open idle and '
       + 'send the first message with `claude_code_send`. The session STAYS OPEN either way — follow up with '
       + '`claude_code_send`, then `claude_code_close` when you are done with it. Set `background: true` to run '
       + 'detached as a dsh job instead of synchronously (requires a jobs runtime in this composition).',
     parameters: {
-      cwd: { type: 'string', required: true, description: 'Absolute working directory the session runs in.' },
+      cwd: {
+        type: 'string',
+        description: 'Absolute working directory the session runs in. Required unless `resume` is set, in which '
+          + "case the session's own working directory is used.",
+      },
       prompt: { type: 'string', description: 'First user message. Omit to open an idle session and send later.' },
       model: { type: 'string', description: 'Model id override; omit for the deployment default.' },
       permission_mode: {
