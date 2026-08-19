@@ -26,7 +26,7 @@ interface ProbeOutput {
   generatedAt: number
   home: string
   live: { sessionId: string, pid: number, cwd: string, name?: string, liveness: string }[]
-  resumable: { sessionId: string }[]
+  resumable: { sessionId: string, cwd: string, lastModified: number, sizeBytes: number, title?: string, gitBranch?: string, createdAt?: number }[]
   warnings: string[]
 }
 
@@ -132,8 +132,7 @@ describe('claude-inventory resumable sessions', () => {
     // The 30-day-old transcript is outside the default 7-day window.
     expect(out.resumable.map(entry => entry.sessionId))
       .toEqual(['33333333-3333-4333-8333-333333333333'])
-    const [entry] = out.resumable as { cwd: string, gitBranch?: string, title?: string,
-      sizeBytes: number, lastModified: number }[]
+    const [entry] = out.resumable
     expect(entry?.cwd).toBe('/Users/b2/Developer/mine/b2infra')
     expect(entry?.gitBranch).toBe('main')
     expect(entry?.title).toContain('plan the session discovery')
@@ -150,7 +149,7 @@ describe('claude-inventory resumable sessions', () => {
 
     expect(runProbe(home, '--max-resumable', '2').resumable).toHaveLength(2)
     expect(runProbe(home, '--window-ms', '90000').resumable).toHaveLength(1)
-    const scrubbed = runProbe(home, '--no-titles').resumable as { title?: string }[]
+    const scrubbed = runProbe(home, '--no-titles').resumable
     expect(scrubbed.every(entry => entry.title === undefined)).toBe(true)
   })
 })
