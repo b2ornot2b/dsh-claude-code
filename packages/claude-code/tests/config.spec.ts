@@ -1,6 +1,7 @@
 import {
-  ClaudeCodeError, DEFAULT_API_KEY_REF, DEFAULT_DELEGATED_ASK_TIMEOUT_MS,
-  DEFAULT_MAX_CONCURRENT_SESSIONS, resolveClaudeCodeConfig,
+  ClaudeCodeError, DEFAULT_API_KEY_REF, DEFAULT_DELEGATED_ASK_TIMEOUT_MS, DEFAULT_DISCOVERY_CACHE_TTL_MS,
+  DEFAULT_DISCOVERY_SOURCE_TIMEOUT_MS, DEFAULT_DISCOVERY_WINDOW_MS, DEFAULT_MAX_CONCURRENT_SESSIONS,
+  DEFAULT_MAX_RESUMABLE, defaultHostLabel, resolveClaudeCodeConfig,
 } from '@deepseek-ai/dsh-claude-code'
 import type { ClaudeCodeConfig } from '@deepseek-ai/dsh-claude-code'
 import { describe, expect, it } from 'vitest'
@@ -30,6 +31,15 @@ describe('resolveClaudeCodeConfig defaults', () => {
         maxConcurrentSessions: DEFAULT_MAX_CONCURRENT_SESSIONS,
       },
       env: {},
+      hostLabel: defaultHostLabel(),
+      discovery: {
+        local: true,
+        cacheTtlMs: DEFAULT_DISCOVERY_CACHE_TTL_MS,
+        recentWindowMs: DEFAULT_DISCOVERY_WINDOW_MS,
+        maxResumable: DEFAULT_MAX_RESUMABLE,
+        includeTitles: true,
+        sourceTimeoutMs: DEFAULT_DISCOVERY_SOURCE_TIMEOUT_MS,
+      },
     })
   })
 
@@ -164,5 +174,37 @@ describe('resolveClaudeCodeConfig rejections', () => {
 
   it('accepts api-key auth with the default reference', () => {
     expect(resolveClaudeCodeConfig({ auth: 'api-key' }).apiKeyRef).toBe(DEFAULT_API_KEY_REF)
+  })
+})
+
+describe('discovery configuration', () => {
+  it('defaults the discovery block and keeps it absent-safe', () => {
+    const resolved = resolveClaudeCodeConfig({})
+
+    expect(resolved.discovery).toEqual({
+      local: true,
+      cacheTtlMs: 15_000,
+      recentWindowMs: 604_800_000,
+      maxResumable: 50,
+      includeTitles: true,
+      sourceTimeoutMs: DEFAULT_DISCOVERY_SOURCE_TIMEOUT_MS,
+    })
+    // hostLabel defaults to this host's short name, never an empty string.
+    expect(resolved.hostLabel.length).toBeGreaterThan(0)
+    expect(resolved.hostLabel).not.toContain('.')
+  })
+
+  it('accepts overrides', () => {
+    const resolved = resolveClaudeCodeConfig({
+      hostLabel: 'b2studio',
+      discovery: { local: false, cacheTtlMs: 1, includeTitles: false, sourceTimeoutMs: 5_000 },
+    })
+
+    expect(resolved.hostLabel).toBe('b2studio')
+    expect(resolved.discovery.local).toBe(false)
+    expect(resolved.discovery.cacheTtlMs).toBe(1)
+    expect(resolved.discovery.includeTitles).toBe(false)
+    expect(resolved.discovery.maxResumable).toBe(50)
+    expect(resolved.discovery.sourceTimeoutMs).toBe(5_000)
   })
 })

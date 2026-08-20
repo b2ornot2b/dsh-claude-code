@@ -174,6 +174,24 @@ describe('claude_code_open (synchronous)', () => {
       await harness.dispose()
     }
   })
+
+  it('names the resumed session instead of "undefined" in the call title when cwd is omitted', async () => {
+    // `cwd` became optional (Task 11: a resume fills it in from discovery),
+    // which made this pending-call title reachable with nothing to
+    // interpolate. It must name what the caller actually gave — the session
+    // id — not the missing directory.
+    const harness = await mountTools()
+    try {
+      const tool = harness.ctx.tools.get('claude_code_open')
+      const view = tool?.presentCall?.({ resume: 'aaaaaaaa-0000-4000-8000-000000000000' })
+      expect(view?.title).toBe('Open Claude Code session resuming aaaaaaaa-0000-4000-8000-000000000000')
+      expect(view?.title).not.toContain('undefined')
+      // The supplied-cwd wording is unchanged.
+      expect(tool?.presentCall?.({ cwd: '/work/repo' })?.title).toBe('Open Claude Code session in /work/repo')
+    } finally {
+      await harness.dispose()
+    }
+  })
 })
 
 describe('claude_code_send / wait / status / cancel / close', () => {

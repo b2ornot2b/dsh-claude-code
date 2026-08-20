@@ -8,6 +8,8 @@
  * @module @deepseek-ai/dsh-claude-code
  */
 
+import { hostname } from 'node:os'
+
 import z from '@deepseek-ai/schemastery'
 
 import {
@@ -23,6 +25,21 @@ export const DEFAULT_DELEGATED_ASK_TIMEOUT_MS = 120_000
 
 /** Default ceiling on live Claude Code sessions per composition. */
 export const DEFAULT_MAX_CONCURRENT_SESSIONS = 4
+
+/** Defaults for the discovery block. */
+export const DEFAULT_DISCOVERY_CACHE_TTL_MS = 15_000
+export const DEFAULT_DISCOVERY_WINDOW_MS = 604_800_000
+export const DEFAULT_MAX_RESUMABLE = 50
+/**
+ * Default per-source deadline for `discover()` (spec §6.3: "a source that
+ * rejects or exceeds its deadline contributes a warning"). Set deliberately
+ * ABOVE the remote probe source's own ~20s SSH transport timeout, so a
+ * well-behaved remote source reports its own richer error first
+ * (`"b2hx: unreachable (ssh connect timeout 6000ms)"`) and this coordinator
+ * deadline is only the backstop for a source that never settles at all — a
+ * wedged child process, a hung transport with no timeout of its own.
+ */
+export const DEFAULT_DISCOVERY_SOURCE_TIMEOUT_MS = 30_000
 
 /** Session defaults applied to every `open()` that does not override them. */
 export interface CcDefaultsConfig {
@@ -113,6 +130,37 @@ export interface CcLimitsConfig {
   readonly idleTimeoutMs?: number
 }
 
+/** Session-discovery surface configuration. */
+export interface CcDiscoveryConfig {
+  /** Discover sessions on this host (SDK store + live registry). */
+  readonly local: boolean
+  /** How long a source's result may be reused. */
+  readonly cacheTtlMs: number
+  /** How far back `resumable` reaches. */
+  readonly recentWindowMs: number
+  /** Per-source cap, so a rendered list stays scannable. */
+  readonly maxResumable: number
+  /** Include titles and first-prompt excerpts (spec §12). */
+  readonly includeTitles: boolean
+  /**
+   * How long the coordinator waits for ONE source before giving up on it and
+   * contributing a warning instead. A rejection is already handled without
+   * this — this is the backstop for a source that never settles, rejects nor
+   * resolves (a hung SSH connect, a wedged child process). Defaults to
+   * {@link DEFAULT_DISCOVERY_SOURCE_TIMEOUT_MS}.
+   */
+  readonly sourceTimeoutMs: number
+}
+
+/**
+ * This host's label in discovery output.
+ * @returns the short hostname, or `local` when the platform gives nothing.
+ */
+export function defaultHostLabel(): string {
+  const name = hostname().split('.')[0]
+  return name === undefined || name === '' ? 'local' : name
+}
+
 /**
  * Plugin config. Every field is optional — the schema supplies defaults, and an
  * explicit YAML `null` is treated exactly like an omitted key.
@@ -144,6 +192,10 @@ export interface ClaudeCodeConfig {
   readonly ask?: CcAskConfig
   /** Resource ceilings. */
   readonly limits?: CcLimitsConfig
+  /** This host's label in discovery output. Defaults to the short hostname. */
+  readonly hostLabel?: string
+  /** Session-discovery surface configuration. */
+  readonly discovery?: Partial<CcDiscoveryConfig>
   /**
    * Extra environment variables overlaid onto the subprocess env (e.g.
    * `API_TIMEOUT_MS`, `CLAUDE_CODE_MAX_RETRIES`). The overlay is applied on top
@@ -184,6 +236,8 @@ export interface ResolvedClaudeCodeConfig {
     readonly idleTimeoutMs?: number
   }
   readonly env: Readonly<Record<string, string>>
+  readonly hostLabel: string
+  readonly discovery: CcDiscoveryConfig
 }
 
 /**
@@ -223,6 +277,15 @@ export const Config: z<ClaudeCodeConfig> = z.object({
     idleTimeoutMs: z.number().min(1),
   }),
   env: z.dict(z.string()).default({}),
+  hostLabel: z.string().default(defaultHostLabel()),
+  discovery: z.object({
+    local: z.boolean().default(true),
+    cacheTtlMs: z.number().min(1).default(DEFAULT_DISCOVERY_CACHE_TTL_MS),
+    recentWindowMs: z.number().min(1).default(DEFAULT_DISCOVERY_WINDOW_MS),
+    maxResumable: z.number().step(1).min(0).default(DEFAULT_MAX_RESUMABLE),
+    includeTitles: z.boolean().default(true),
+    sourceTimeoutMs: z.number().min(1).default(DEFAULT_DISCOVERY_SOURCE_TIMEOUT_MS),
+  }),
 })
 
 /**
@@ -252,6 +315,7 @@ export function resolveClaudeCodeConfig(config: ClaudeCodeConfig = {}): Resolved
   const defaults = parsed.defaults ?? {}
   const ask = parsed.ask ?? {}
   const limits = parsed.limits ?? {}
+  const discovery = parsed.discovery ?? {}
 
   const resolved: ResolvedClaudeCodeConfig = {
     ...optional('executablePath', parsed.executablePath),
@@ -278,6 +342,15 @@ export function resolveClaudeCodeConfig(config: ClaudeCodeConfig = {}): Resolved
       ...optional('idleTimeoutMs', limits.idleTimeoutMs),
     },
     env: parsed.env ?? {},
+    hostLabel: parsed.hostLabel ?? defaultHostLabel(),
+    discovery: {
+      local: discovery.local ?? true,
+      cacheTtlMs: discovery.cacheTtlMs ?? DEFAULT_DISCOVERY_CACHE_TTL_MS,
+      recentWindowMs: discovery.recentWindowMs ?? DEFAULT_DISCOVERY_WINDOW_MS,
+      maxResumable: discovery.maxResumable ?? DEFAULT_MAX_RESUMABLE,
+      includeTitles: discovery.includeTitles ?? true,
+      sourceTimeoutMs: discovery.sourceTimeoutMs ?? DEFAULT_DISCOVERY_SOURCE_TIMEOUT_MS,
+    },
   }
 
   // Individually-valid values that contradict each other. An empty credential

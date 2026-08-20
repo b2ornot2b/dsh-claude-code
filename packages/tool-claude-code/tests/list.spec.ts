@@ -284,3 +284,235 @@ describe('projectSessions', () => {
     expect(renderSessionList(sessions, false)).not.toContain('NaN')
   })
 })
+
+describe('claude_code_list scope', () => {
+  it('defaults to composition and renders exactly the legacy text', async () => {
+    const harness = await mountTools()
+    try {
+      const result = await harness.call('claude_code_list', {})
+
+      expect(result.value).toEqual({ sessions: [] })
+      expect(text(result)).toBe(EMPTY_SESSION_LIST)
+    } finally {
+      await harness.dispose()
+    }
+  })
+
+  it('names what it searched and what failed when a wide scope finds nothing', async () => {
+    const harness = await mountTools()
+    try {
+      harness.ctx.claudeCode.registerDiscoverySource({
+        id: 'remote:b2hx',
+        host: 'b2hx',
+        discover: async () => Promise.reject(new Error('unreachable (ssh connect timeout 6000ms)')),
+      })
+
+      const result = await harness.call('claude_code_list', { scope: 'mesh' })
+
+      // "nothing exists" and "I could not look" must never render alike.
+      expect(text(result)).not.toBe(EMPTY_SESSION_LIST)
+      expect(text(result)).toContain('b2hx')
+      expect(text(result)).toContain('unreachable')
+      expect((result.value as { warnings?: string[] }).warnings?.length).toBe(1)
+    } finally {
+      await harness.dispose()
+    }
+  })
+
+  it('groups external live and resumable sessions with their hosts, composed section first', async () => {
+    const harness = await mountTools()
+    try {
+      // A real composed session, so the ordering assertion below has
+      // something to check the composed section against — `toContain`
+      // cannot tell "present and first" from "present and last".
+      const opened = await harness.call('claude_code_open', { cwd: CWD })
+      const composedId = (opened.value as { session_id: string }).session_id
+
+      harness.ctx.claudeCode.registerDiscoverySource({
+        id: 'remote:b2umini',
+        host: 'b2umini',
+        discover: async request => Promise.resolve({
+          generatedAt: request.now,
+          cached: false,
+          warnings: [],
+          sessions: [{
+            sessionId: '889cd0f8-30f5-4469-b63a-086d93cbb047' as CcSessionId,
+            origin: 'live-external' as const, host: 'b2umini', sourceId: 'remote:b2umini',
+            cwd: '/Users/b2/Developer/mine/grigios', title: 'grigios-cb',
+            lastActivityAt: request.now - 600_000, sendable: false, resumable: true,
+            fidelity: 'probe' as const, live: { liveness: 'assumed' as const, pid: 3796 },
+          }, {
+            sessionId: '43bc3d80-fb06-4f6e-805f-f3eeff272690' as CcSessionId,
+            origin: 'resumable' as const, host: 'b2umini', sourceId: 'remote:b2umini',
+            cwd: '/Users/b2/Developer/mine/grigios', title: 'fix the thing',
+            lastActivityAt: request.now - 3_600_000, sendable: false, resumable: true,
+            fidelity: 'probe' as const,
+          }],
+        }),
+      })
+
+      const result = await harness.call('claude_code_list', { scope: 'mesh' })
+      const value = result.value as {
+        external_live: { session_id: string, host: string, sendable: boolean }[]
+        external_resumable: { session_id: string }[]
+      }
+
+      expect(value.external_live).toHaveLength(1)
+      expect(value.external_live[0]?.host).toBe('b2umini')
+      expect(value.external_live[0]?.sendable).toBe(false)
+      expect(value.external_resumable).toHaveLength(1)
+
+      const rendered = text(result)
+      // Position, not mere presence: `toContain` alone would still pass if
+      // "Resumable" rendered before "Running elsewhere", or if the composed
+      // section were dropped entirely — a regression a model reading this
+      // list would experience as the SESSION_LIMIT close-candidate promise
+      // silently breaking.
+      const composedIndex = rendered.indexOf(composedId)
+      const liveIndex = rendered.indexOf('Running elsewhere')
+      const resumableIndex = rendered.indexOf('Resumable')
+      expect(composedIndex).toBeGreaterThanOrEqual(0)
+      expect(liveIndex).toBeGreaterThan(composedIndex)
+      expect(resumableIndex).toBeGreaterThan(liveIndex)
+      // 'b2umini' is not this composition's own host, so cross-host adoption
+      // (design §8.2, not built) means neither row may be forked from here —
+      // says so plainly rather than teaching claude_code_open({ resume, fork:
+      // true }), which would fail opaquely against a session this host's
+      // store has never heard of.
+      expect(rendered).toContain('not resumable from here yet')
+      expect(rendered).not.toContain('fork with claude_code_open')
+      expect(rendered).toContain('b2umini')
+    } finally {
+      await harness.dispose()
+    }
+  })
+
+  it('scopes the fork instruction to a row on THIS host, and refuses it for a row on another host', async () => {
+    const harness = await mountTools()
+    try {
+      const thisHost = harness.ctx.claudeCode.config.hostLabel
+
+      harness.ctx.claudeCode.registerDiscoverySource({
+        id: 'remote:this-host',
+        host: thisHost,
+        discover: async request => Promise.resolve({
+          generatedAt: request.now,
+          cached: false,
+          warnings: [],
+          sessions: [{
+            sessionId: 'aaaaaaaa-1111-4111-8111-111111111111' as CcSessionId,
+            origin: 'live-external' as const, host: thisHost, sourceId: 'remote:this-host',
+            cwd: '/tmp/local', title: 'local-session',
+            lastActivityAt: request.now - 60_000, sendable: false, resumable: true,
+            fidelity: 'probe' as const, live: { liveness: 'assumed' as const },
+          }],
+        }),
+      })
+      harness.ctx.claudeCode.registerDiscoverySource({
+        id: 'remote:b2hx',
+        host: 'b2hx',
+        discover: async request => Promise.resolve({
+          generatedAt: request.now,
+          cached: false,
+          warnings: [],
+          sessions: [{
+            sessionId: 'bbbbbbbb-2222-4222-8222-222222222222' as CcSessionId,
+            origin: 'live-external' as const, host: 'b2hx', sourceId: 'remote:b2hx',
+            cwd: '/tmp/remote', title: 'remote-session',
+            lastActivityAt: request.now - 60_000, sendable: false, resumable: true,
+            fidelity: 'probe' as const, live: { liveness: 'assumed' as const },
+          }],
+        }),
+      })
+
+      const result = await harness.call('claude_code_list', { scope: 'mesh' })
+      const rendered = text(result)
+      const value = result.value as { this_host?: string }
+
+      expect(value.this_host).toBe(thisHost)
+      // The local row: fork is offered, unqualified.
+      const localLine = rendered.split('\n').find(line => line.includes('local-session'))
+      expect(localLine).toContain('fork with claude_code_open({ resume, fork: true })')
+      // The remote row: fork is explicitly refused, never an unqualified
+      // "fork with claude_code_open" instruction that would fail opaquely.
+      const remoteLine = rendered.split('\n').find(line => line.includes('remote-session'))
+      expect(remoteLine).toContain('not resumable from here yet')
+      expect(remoteLine).not.toContain('fork with claude_code_open')
+    } finally {
+      await harness.dispose()
+    }
+  })
+
+  it('never forwards sendable: true from a discovery source — nothing outside this composition has a control channel', async () => {
+    const harness = await mountTools()
+    try {
+      harness.ctx.claudeCode.registerDiscoverySource({
+        id: 'remote:untrusted',
+        host: 'b2untrusted',
+        discover: async request => Promise.resolve({
+          generatedAt: request.now,
+          cached: false,
+          warnings: [],
+          sessions: [{
+            sessionId: 'aaaaaaaa-0000-4000-8000-000000000000' as CcSessionId,
+            origin: 'live-external' as const, host: 'b2untrusted', sourceId: 'remote:untrusted',
+            cwd: '/tmp', lastActivityAt: request.now,
+            // A misbehaving (or malicious) source claiming a control channel
+            // it cannot possibly have. The projection must never repeat this
+            // claim — a model reading the structured value, not the prose,
+            // would otherwise try claude_code_send against it and fail.
+            sendable: true, resumable: true,
+            fidelity: 'probe' as const,
+          }],
+        }),
+      })
+
+      const result = await harness.call('claude_code_list', { scope: 'mesh' })
+      const value = result.value as { external_live: { sendable: boolean }[] }
+
+      expect(value.external_live).toHaveLength(1)
+      expect(value.external_live[0]?.sendable).toBe(false)
+    } finally {
+      await harness.dispose()
+    }
+  })
+
+  it('renders warnings alongside real sections, not only in the fully-empty case', async () => {
+    const harness = await mountTools()
+    try {
+      harness.ctx.claudeCode.registerDiscoverySource({
+        id: 'remote:b2umini',
+        host: 'b2umini',
+        discover: async request => Promise.resolve({
+          generatedAt: request.now,
+          cached: false,
+          warnings: [],
+          sessions: [{
+            sessionId: '889cd0f8-30f5-4469-b63a-086d93cbb047' as CcSessionId,
+            origin: 'live-external' as const, host: 'b2umini', sourceId: 'remote:b2umini',
+            cwd: '/Users/b2/Developer/mine/grigios', lastActivityAt: request.now - 600_000,
+            sendable: false, resumable: true, fidelity: 'probe' as const,
+          }],
+        }),
+      })
+      harness.ctx.claudeCode.registerDiscoverySource({
+        id: 'remote:b2hx',
+        host: 'b2hx',
+        discover: async () => Promise.reject(new Error('unreachable (ssh connect timeout 6000ms)')),
+      })
+
+      const result = await harness.call('claude_code_list', { scope: 'mesh' })
+      const rendered = text(result)
+
+      // A source failing partway must not swallow the sessions the OTHER
+      // sources found, and the found sessions must not swallow the warning.
+      expect(rendered).toContain('Running elsewhere')
+      expect(rendered).toContain('b2umini')
+      expect(rendered).toContain('Warnings')
+      expect(rendered).toContain('b2hx')
+      expect(rendered).toContain('unreachable')
+    } finally {
+      await harness.dispose()
+    }
+  })
+})

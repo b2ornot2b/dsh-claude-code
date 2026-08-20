@@ -57,8 +57,10 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { GenericCallView } from '@deepseek-ai/dsh-tools'
 import {
   CC_CLOSE_REASONS,
+  CC_DISCOVERY_SCOPES,
   CC_PERMISSION_MODES,
   CC_SESSION_STATUSES,
+  groupByOrigin,
 } from '@deepseek-ai/dsh-claude-code'
 import type { CcMessageEnvelope, CcSession, CcSessionId, CcSessionSnapshot } from '@deepseek-ai/dsh-claude-code'
 // Side-effect type-only imports: they contribute the `Context` augmentations
@@ -68,8 +70,11 @@ import type {} from '@deepseek-ai/dsh-jobs'
 
 import { startBackgroundSession } from './background.ts'
 import { abortedError, errorCode } from './errors.ts'
-import { projectSessions, renderSessionList, SESSION_LIST_SCHEMA } from './list.ts'
-import { noSuchSession, openSession, requireSession } from './open.ts'
+import {
+  DISCOVERED_SESSION_ITEM_SCHEMA, projectDiscovered, projectSessions, renderSessionList, renderWideList,
+  SESSION_LIST_SCHEMA,
+} from './list.ts'
+import { describeOpenTarget, noSuchSession, openSession, requireSession } from './open.ts'
 import {
   answerInDshUi, PENDING_ASK_DETAILS_SCHEMA, projectPendingAsks, renderPendingAsks, renderStillRunning,
 } from './pending.ts'
@@ -280,12 +285,17 @@ export function apply(ctx: Context, _config: Config = {}): void {
   ctx.tools.register(defineTool({
     name: 'claude_code_open',
     description: 'Open a new Claude Code session, or resume (optionally fork) an existing one, rooted at a working '
-      + 'directory. With `prompt`, waits for that first turn and returns its answer; omit `prompt` to open idle and '
+      + 'directory. `cwd` is required unless `resume` is set, in which case the session\'s own working directory '
+      + 'is used. With `prompt`, waits for that first turn and returns its answer; omit `prompt` to open idle and '
       + 'send the first message with `claude_code_send`. The session STAYS OPEN either way — follow up with '
       + '`claude_code_send`, then `claude_code_close` when you are done with it. Set `background: true` to run '
       + 'detached as a dsh job instead of synchronously (requires a jobs runtime in this composition).',
     parameters: {
-      cwd: { type: 'string', required: true, description: 'Absolute working directory the session runs in.' },
+      cwd: {
+        type: 'string',
+        description: 'Absolute working directory the session runs in. Required unless `resume` is set, in which '
+          + "case the session's own working directory is used.",
+      },
       prompt: { type: 'string', description: 'First user message. Omit to open an idle session and send later.' },
       model: { type: 'string', description: 'Model id override; omit for the deployment default.' },
       permission_mode: {
@@ -407,7 +417,7 @@ export function apply(ctx: Context, _config: Config = {}): void {
         human_decisions: turnDecisions(opened.session, turnStart),
       }
     },
-    presentCall: args => genericCall(`Open Claude Code session in ${args.cwd}`, args.resume ?? args.cwd),
+    presentCall: args => genericCall(`Open Claude Code session ${describeOpenTarget(args)}`, args.resume ?? args.cwd),
   }))
 
   ctx.tools.register(defineTool({
@@ -635,28 +645,79 @@ export function apply(ctx: Context, _config: Config = {}): void {
 
   ctx.tools.register(defineTool({
     name: 'claude_code_list',
-    description: 'List the Claude Code sessions this composition is holding open, best close candidate first: '
-      + 'id, working directory, status, how long each has been open, and which are BLOCKED on a human answering '
-      + 'a permission/question in the dsh UI. Call this when claude_code_open fails with SESSION_LIMIT, or '
-      + 'whenever you need a session id you did not open yourself — the concurrency limit is service-wide, so '
-      + 'sessions from OTHER dsh sessions sharing this host can be holding the slots. Set `include_closed: true` '
-      + 'to also see recently-closed sessions and why each one ended.',
+    description: 'List Claude Code sessions, best close candidate first: id, working directory, status, how long '
+      + 'each has been open, and which are BLOCKED on a human answering a permission/question in the dsh UI. Call '
+      + 'this when claude_code_open fails with SESSION_LIMIT, or whenever you need a session id you did not open '
+      + 'yourself — the concurrency limit is service-wide, so sessions from OTHER dsh sessions sharing this host '
+      + 'can be holding the slots. Set `include_closed: true` to also see recently-closed sessions and why each '
+      + 'one ended. By default this only sees sessions THIS composition opened; set `scope: "host"` or `"mesh"` to '
+      + 'also find sessions running elsewhere that you did not open — those cannot be sent to. One on THIS host '
+      + 'can be forked with claude_code_open({ resume, fork: true }); one on another host cannot be continued '
+      + 'from here yet.',
     parameters: {
       include_closed: {
         type: 'boolean',
         description: 'Also list recently-closed sessions (with close_reason). Defaults to false: only live '
           + 'sessions hold a concurrency slot.',
       },
+      scope: {
+        type: 'string',
+        enum: CC_DISCOVERY_SCOPES,
+        description: 'How wide to look. "composition" (default) lists only sessions this dsh composition holds '
+          + 'open — the sessions that occupy a concurrency slot. "host" adds sessions running elsewhere on this '
+          + 'machine plus recently-used sessions on disk. "mesh" adds the other configured hosts. Use a wider '
+          + 'scope to find a session you did not open yourself; those cannot be sent to. One on this host can be '
+          + 'forked with claude_code_open({ resume, fork: true }); one on another host cannot be continued from '
+          + 'here yet.',
+      },
     },
     output: {
       schema: {
         type: 'object',
         additionalProperties: false,
-        properties: { sessions: SESSION_LIST_SCHEMA },
+        properties: {
+          sessions: SESSION_LIST_SCHEMA,
+          external_live: {
+            type: 'array',
+            items: DISCOVERED_SESSION_ITEM_SCHEMA,
+            description: 'Sessions running elsewhere — on this host, or (with scope "mesh") another configured '
+              + 'host — that this composition did not open. Not sendable. One with `host` equal to `this_host` '
+              + 'can be forked with claude_code_open({ resume, fork: true }); one on another host cannot be '
+              + 'continued from here yet. Present only when `scope` is "host" or "mesh".',
+          },
+          external_resumable: {
+            type: 'array',
+            items: DISCOVERED_SESSION_ITEM_SCHEMA,
+            description: 'Sessions known only from disk — not currently running anywhere. One with `host` equal '
+              + 'to `this_host` can be resumed or forked with claude_code_open; one on another host cannot be '
+              + 'continued from here yet. Present only when `scope` is "host" or "mesh".',
+          },
+          warnings: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Discovery sources that could not be reached, e.g. "b2hx: unreachable (...)" — named so '
+              + 'a wide search that found nothing can be told apart from a search that could not look. Present '
+              + 'only when `scope` is "host" or "mesh".',
+          },
+          this_host: {
+            type: 'string',
+            description: 'This composition\'s own host label. Compare it against a row\'s `host` to tell which '
+              + 'external sessions can actually be forked from here. Present only when `scope` is "host" or '
+              + '"mesh".',
+          },
+        },
       },
       render: (args, value) => [{
         type: 'text',
-        text: renderSessionList(value.sessions, args.include_closed === true),
+        text: args.scope === undefined || args.scope === 'composition'
+          ? renderSessionList(value.sessions, args.include_closed === true)
+          : renderWideList(
+              renderSessionList(value.sessions, args.include_closed === true),
+              value.external_live ?? [],
+              value.external_resumable ?? [],
+              value.warnings ?? [],
+              args.scope,
+              value.this_host ?? ''),
       } satisfies ContentBlock],
     },
     async execute(args) {
@@ -664,9 +725,27 @@ export function apply(ctx: Context, _config: Config = {}): void {
       // measured against two `Date.now()` calls would report ages that disagree
       // with each other by however long the projection took, and `render` must
       // stay a pure function of what was logged.
-      const sessions = ctx.claudeCode.list(
-        args.include_closed === true ? { includeClosed: true } : {})
-      return await Promise.resolve({ sessions: projectSessions(sessions, Date.now()) })
+      const now = Date.now()
+      const sessions = projectSessions(ctx.claudeCode.list(
+        args.include_closed === true ? { includeClosed: true } : {}), now)
+      const scope = args.scope ?? 'composition'
+      // `'composition'` touches no discovery source at all — see
+      // `ClaudeCode.discover`'s own doc comment — so the default call pays for
+      // nothing beyond the inventory projection it already paid for, and the
+      // returned value is exactly what this tool has always returned.
+      if (scope === 'composition') return { sessions }
+      const discovered = await ctx.claudeCode.discover({ scope })
+      const groups = groupByOrigin(discovered.sessions)
+      return {
+        sessions,
+        external_live: projectDiscovered(groups.liveExternal, now),
+        external_resumable: projectDiscovered(groups.resumable, now),
+        warnings: [...discovered.warnings],
+        // The seam already resolves and carries this host's own label
+        // (`config.hostLabel`); reusing it here is what lets the render step
+        // tell a fork-able row apart from one on another host, per row.
+        this_host: ctx.claudeCode.config.hostLabel,
+      }
     },
     presentCall: () => genericCall('List Claude Code sessions'),
   }))
